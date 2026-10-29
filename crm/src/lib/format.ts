@@ -36,3 +36,42 @@ export function formatDate(d: string | null): string {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
   return m ? `${m[3]}.${m[2]}.${m[1]}` : d;
 }
+
+// Сегодняшняя дата по Минску в виде 2026-10-29 (для значений по умолчанию в формах).
+export function todayMinsk(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Minsk' }).format(new Date());
+}
+
+const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
+
+export interface ScheduleSlot {
+  group_id: string;
+  weekday: number;
+  start_time: string;
+  end_time: string | null;
+  location: string | null;
+}
+
+// 19:00:00 -> 19:00
+export function timeHM(t: string | null): string {
+  return t ? t.slice(0, 5) : '';
+}
+
+// Слоты одной группы -> «Пн 19:00», «Ср 19:00»
+export function scheduleLabels(slots: ScheduleSlot[]): string[] {
+  return [...slots]
+    .sort((a, b) => a.weekday - b.weekday || a.start_time.localeCompare(b.start_time))
+    .map((s) => {
+      const end = s.end_time ? `–${timeHM(s.end_time)}` : '';
+      return `${WEEKDAYS[s.weekday - 1] ?? '?'} ${timeHM(s.start_time)}${end}`;
+    });
+}
+
+export function pluralStudents(n: number): string {
+  const n100 = n % 100;
+  const n10 = n % 10;
+  if (n100 >= 11 && n100 <= 14) return `${n} учеников`;
+  if (n10 === 1) return `${n} ученик`;
+  if (n10 >= 2 && n10 <= 4) return `${n} ученика`;
+  return `${n} учеников`;
+}
