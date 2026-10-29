@@ -4,6 +4,8 @@ import Layout from './components/Layout';
 import Login from './pages/Login';
 import Crm from './pages/Crm';
 import StudentCard from './pages/StudentCard';
+import Groups from './pages/Groups';
+import GroupPage from './pages/GroupPage';
 import Soon from './pages/Soon';
 
 export default function App() {
@@ -34,8 +36,8 @@ export default function App() {
       <Route element={<Layout />}>
         <Route path="/crm" element={<Crm />} />
         <Route path="/students/:id" element={<StudentCard />} />
-        <Route path="/groups" element={<Soon title="Группы" />} />
-        <Route path="/groups/:id" element={<Soon title="Страница группы" />} />
+        <Route path="/groups" element={<Groups />} />
+        <Route path="/groups/:id" element={<GroupPage />} />
         <Route path="/attendance" element={<Soon title="Посещаемость" />} />
         {isAdmin && <Route path="/pricing" element={<Soon title="Цены и расписание" />} />}
         {isAdmin && <Route path="/billing" element={<Soon title="Оплаты и счета" />} />}
