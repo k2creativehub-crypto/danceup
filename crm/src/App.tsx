@@ -3,6 +3,7 @@ import { useAuth } from './auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Crm from './pages/Crm';
+import StudentCard from './pages/StudentCard';
 import Soon from './pages/Soon';
 
 export default function App() {
@@ -32,6 +33,7 @@ export default function App() {
     <Routes>
       <Route element={<Layout />}>
         <Route path="/crm" element={<Crm />} />
+        <Route path="/students/:id" element={<StudentCard />} />
         <Route path="/groups" element={<Soon title="Группы" />} />
         <Route path="/groups/:id" element={<Soon title="Страница группы" />} />
         <Route path="/attendance" element={<Soon title="Посещаемость" />} />

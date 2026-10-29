@@ -32,6 +32,11 @@ a { color: inherit; }
 
 /* Кнопки */
 .btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  text-decoration: none;
   font: inherit;
   font-weight: 500;
   min-height: 44px;
@@ -136,7 +141,7 @@ input:focus, select:focus, .btn:focus-visible {
 .count { margin: 12px 0 8px; font-size: 14px; }
 
 .list { border-top: 1px solid var(--line); }
-.row-head { display: none; font-size: 13px; color: var(--muted); font-weight: 500; }
+.row.row-head { display: none; font-size: 13px; color: var(--muted); font-weight: 500; }
 .letter {
   background: var(--bg-alt);
   color: var(--muted);
@@ -175,12 +180,82 @@ input:focus, select:focus, .btn:focus-visible {
 /* Большой экран */
 @media (min-width: 800px) {
   .filters { grid-template-columns: 2fr 2fr 2fr 1fr; }
-  .row-head, .row {
+  .row, .row.row-head {
     display: grid;
-    grid-template-columns: 2.2fr 0.8fr 2.6fr 1.6fr;
+    grid-template-columns: 2.2fr 0.8fr 2.6fr 1.6fr 130px;
     gap: 16px;
     align-items: center;
   }
-  .row-head { padding: 10px 12px; }
+  .row.row-head { padding: 10px 12px; }
+  .cell-open .btn { width: auto; }
   .content { padding: 28px 24px; }
+}
+
+/* Кнопки малого размера и кнопка «Открыть» */
+.btn-sm { min-height: 36px; padding: 0 12px; font-size: 14px; }
+.cell-open { margin-top: 6px; }
+.cell-open .btn { width: 100%; }
+
+/* Карточка ученика */
+.card-page { max-width: 760px; }
+.back-btn { margin-bottom: 16px; }
+.subtitle { margin: -8px 0 16px; font-size: 14px; }
+.panel {
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  margin-bottom: 16px;
+}
+.panel h2 { font-size: 18px; font-weight: 500; margin: 0 0 8px; }
+.panel h3 { font-size: 17px; font-weight: 500; margin: 0 0 4px; }
+.section-title { font-size: 18px; font-weight: 500; margin: 24px 0 12px; }
+
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 4px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+.panel > .field-row:first-of-type, .panel h2 + .field-row, .panel .subtitle + .field-row { border-top: none; }
+.field-label { font-size: 13px; color: var(--muted); }
+.field-body { display: flex; align-items: flex-start; gap: 8px; min-width: 0; }
+.field-value { flex: 1; word-break: break-word; min-height: 24px; padding-top: 6px; }
+.field-value a { color: #2b6cb0; text-decoration: none; }
+.field-edit { flex: 1; display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.field-edit input, .field-edit select, .field-edit textarea { width: 100%; }
+.field-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.field-error, .field-hint { font-size: 13px; }
+
+textarea {
+  font: inherit;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  resize: vertical;
+}
+textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+.icon-btn {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+}
+.icon-btn:hover { background: var(--primary-soft); border-color: var(--primary); }
+.icon-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+@media (min-width: 800px) {
+  .field-row { grid-template-columns: 200px 1fr; column-gap: 16px; align-items: start; }
+  .field-row .field-label { padding-top: 8px; }
+  .field-error, .field-hint { grid-column: 2; }
 }

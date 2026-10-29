@@ -29,3 +29,10 @@ export function formatPhone(p: string | null): string {
 export function digits(s: string): string {
   return s.replace(/\D/g, '');
 }
+
+// 2026-03-05 -> 05.03.2026
+export function formatDate(d: string | null): string {
+  if (!d) return '';
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(d);
+  return m ? `${m[3]}.${m[2]}.${m[1]}` : d;
+}

@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
 import { supabase } from '../supabase';
+import { PencilIcon } from '../components/Icons';
 import { useAuth } from '../auth';
 import { ageYears, digits, formatPhone, pluralYears } from '../lib/format';
 
@@ -29,6 +31,27 @@ interface Enrollment {
   is_primary: boolean;
 }
 
+const FILTER_KEY = 'crm-filters';
+
+interface SavedFilters {
+  query: string;
+  groupId: string;
+  teacherName: string;
+  status: string;
+}
+
+// Фильтры запоминаются на время сессии, чтобы после возврата из карточки список не сбрасывался.
+function loadFilters(): SavedFilters {
+  const empty: SavedFilters = { query: '', groupId: '', teacherName: '', status: 'all' };
+  try {
+    const raw = sessionStorage.getItem(FILTER_KEY);
+    if (raw) return { ...empty, ...JSON.parse(raw) };
+  } catch {
+    /* хранилище недоступно, начинаем с пустых фильтров */
+  }
+  return empty;
+}
+
 const STATUS_LABEL: Record<Enrollment['status'], string> = {
   active: 'занимается',
   reserve: 'резерв',
@@ -45,10 +68,19 @@ export default function Crm() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  const [query, setQuery] = useState('');
-  const [groupId, setGroupId] = useState('');
-  const [teacherName, setTeacherName] = useState('');
-  const [status, setStatus] = useState<'all' | Enrollment['status']>('all');
+  const [initial] = useState(loadFilters);
+  const [query, setQuery] = useState(initial.query);
+  const [groupId, setGroupId] = useState(initial.groupId);
+  const [teacherName, setTeacherName] = useState(initial.teacherName);
+  const [status, setStatus] = useState<'all' | Enrollment['status']>(initial.status as 'all' | Enrollment['status']);
+
+  useEffect(() => {
+    try {
+      sessionStorage.setItem(FILTER_KEY, JSON.stringify({ query, groupId, teacherName, status }));
+    } catch {
+      /* ничего страшного, фильтры просто не запомнятся */
+    }
+  }, [query, groupId, teacherName, status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -185,6 +217,7 @@ export default function Crm() {
           <div>Возраст</div>
           <div>Группы</div>
           <div>Контакт</div>
+          <div></div>
         </div>
 
         {rows.length === 0 && <p className="muted">Никого не найдено.</p>}
@@ -230,6 +263,11 @@ export default function Crm() {
                 <div className="cell-contact">
                   {phone ? <a href={`tel:${phone}`}>{formatPhone(phone)}</a> : <span className="muted">нет телефона</span>}
                   {contactName && <small className="muted">{contactName}</small>}
+                </div>
+                <div className="cell-open">
+                  <Link className="btn btn-sm" to={`/students/${s.id}`} title="Открыть карточку">
+                    <PencilIcon size={16} /> Открыть
+                  </Link>
                 </div>
               </div>
             </div>
