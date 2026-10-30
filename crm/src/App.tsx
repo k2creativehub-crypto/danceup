@@ -3,7 +3,7 @@ import { useAuth } from './auth';
 import Layout from './components/Layout';
 import Login from './pages/Login';
 import Crm from './pages/Crm';
-import StudentCard from './pages/StudentCard';
+import { DirectoryProvider } from './lib/store';
 import Groups from './pages/Groups';
 import GroupPage from './pages/GroupPage';
 import Soon from './pages/Soon';
@@ -32,10 +32,11 @@ export default function App() {
   const isAdmin = profile.role === 'admin';
 
   return (
+    <DirectoryProvider>
     <Routes>
       <Route element={<Layout />}>
         <Route path="/crm" element={<Crm />} />
-        <Route path="/students/:id" element={<StudentCard />} />
+        <Route path="/students/:id" element={<Crm />} />
         <Route path="/groups" element={<Groups />} />
         <Route path="/groups/:id" element={<GroupPage />} />
         <Route path="/attendance" element={<Soon title="Посещаемость" />} />
@@ -45,5 +46,6 @@ export default function App() {
         <Route path="*" element={<Navigate to="/crm" replace />} />
       </Route>
     </Routes>
+    </DirectoryProvider>
   );
 }
