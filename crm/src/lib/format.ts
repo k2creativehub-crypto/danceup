@@ -45,6 +45,7 @@ export function todayMinsk(): string {
 const WEEKDAYS = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс'];
 
 export interface ScheduleSlot {
+  id: string;
   group_id: string;
   weekday: number;
   start_time: string;
@@ -74,4 +75,19 @@ export function pluralStudents(n: number): string {
   if (n10 === 1) return `${n} ученик`;
   if (n10 >= 2 && n10 <= 4) return `${n} ученика`;
   return `${n} учеников`;
+}
+
+export const WEEKDAY_NAMES = ['Понедельник', 'Вторник', 'Среда', 'Четверг', 'Пятница', 'Суббота', 'Воскресенье'];
+
+// 2500 -> «25,00 BYN»
+export function formatMoney(kopecks: number): string {
+  const v = (kopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${v} BYN`;
+}
+
+// «25», «25,5», «25.50» -> копейки; при неверном вводе null
+export function parseMoney(input: string): number | null {
+  const t = input.trim().replace(/\s+/g, '').replace(',', '.');
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
+  return Math.round(Number(t) * 100);
 }
