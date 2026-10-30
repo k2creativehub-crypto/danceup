@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { useAuth } from '../auth';
@@ -7,41 +7,27 @@ import type { Option } from '../components/EditableField';
 import { updateRow } from '../lib/db';
 import { PHONE_HINT, normalizePhone } from '../lib/phone';
 import { ageYears, formatDate, formatPhone, pluralYears } from '../lib/format';
+import { useDirectory } from '../lib/store';
 
-interface Guardian {
+// Данные, которых нет в общем справочнике: e-mail, договоры, заметки. Они подгружаются фоном.
+interface GuardianExtra {
   id: string;
-  full_name: string | null;
-  phone: string | null;
   phone_raw: string | null;
   email: string | null;
 }
-interface StudentRow {
+interface EnrExtra {
   id: string;
-  full_name: string;
-  birth_date: string | null;
-  birth_date_raw: string | null;
-  phone: string | null;
-  guardian_id: string | null;
-  guardian: Guardian | null;
-}
-interface Enr {
-  id: string;
-  group_id: string;
   season: string;
-  is_primary: boolean;
-  status: 'active' | 'reserve' | 'left';
-  start_date: string | null;
-  end_date: string | null;
   trial_date: string | null;
   trial_note: string | null;
   contract_number: string | null;
   contract_date: string | null;
   notes: string | null;
 }
-interface GroupRow {
-  id: string;
-  name: string;
-  teacher: { full_name: string } | null;
+interface Extras {
+  forId: string;
+  guardian: GuardianExtra | null;
+  enrollments: Map<string, EnrExtra>;
 }
 
 const STATUS_OPTIONS: Option[] = [
@@ -120,133 +106,192 @@ function AddGuardian({ studentId, onDone }: { studentId: string; onDone: () => v
   );
 }
 
+const STATUS_LABEL: Record<string, string> = {
+  active: 'Занимается',
+  reserve: 'Резерв',
+  left: 'Выбыл',
+};
+
+function SkeletonRow({ label }: { label?: string }) {
+  return (
+    <div className="field-row">
+      <div className="field-label">{label ?? ''}</div>
+      <div className="field-body">
+        <span className="skeleton skeleton-line" style={{ width: '55%' }} />
+      </div>
+    </div>
+  );
+}
+
 export default function StudentCard() {
   const { id } = useParams();
   const navigate = useNavigate();
   const { profile } = useAuth();
+  const dir = useDirectory();
   const isAdmin = profile?.role === 'admin';
 
-  const [student, setStudent] = useState<StudentRow | null>(null);
-  const [enrollments, setEnrollments] = useState<Enr[]>([]);
-  const [groups, setGroups] = useState<Map<string, GroupRow>>(new Map());
-  const [siblings, setSiblings] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const [extras, setExtras] = useState<Extras | null>(null);
+  const [extrasError, setExtrasError] = useState<string | null>(null);
   const [version, setVersion] = useState(0);
-  const reload = () => setVersion((v) => v + 1);
 
   useEffect(() => {
     if (!id) return;
     let cancelled = false;
     (async () => {
-      const [st, en, gr] = await Promise.all([
-        supabase
-          .from('students')
-          .select(
-            'id, full_name, birth_date, birth_date_raw, phone, guardian_id, guardian:guardians(id, full_name, phone, phone_raw, email)',
-          )
-          .eq('id', id)
-          .maybeSingle(),
+      const [st, en] = await Promise.all([
+        supabase.from('students').select('id, guardian:guardians(id, phone_raw, email)').eq('id', id).maybeSingle(),
         supabase
           .from('enrollments_v')
-          .select(
-            'id, group_id, season, is_primary, status, start_date, end_date, trial_date, trial_note, contract_number, contract_date, notes',
-          )
+          .select('id, season, trial_date, trial_note, contract_number, contract_date, notes')
           .eq('student_id', id),
-        supabase.from('groups').select('id, name, teacher:teachers(full_name)').limit(1000),
       ]);
       if (cancelled) return;
-      const firstError = st.error ?? en.error ?? gr.error;
+      const firstError = st.error ?? en.error;
       if (firstError) {
-        setError(firstError.message);
-        setLoading(false);
+        setExtrasError(firstError.message);
         return;
       }
-      const s = (st.data ?? null) as unknown as StudentRow | null;
-      setStudent(s);
-      setEnrollments((en.data ?? []) as unknown as Enr[]);
-      const gm = new Map<string, GroupRow>();
-      for (const g of (gr.data ?? []) as unknown as GroupRow[]) gm.set(g.id, g);
-      setGroups(gm);
-
-      if (s?.guardian_id) {
-        const cnt = await supabase
-          .from('students')
-          .select('id', { count: 'exact', head: true })
-          .eq('guardian_id', s.guardian_id);
-        if (!cancelled) setSiblings(cnt.count ?? 0);
-      } else {
-        setSiblings(0);
-      }
-      setLoading(false);
+      setExtrasError(null);
+      const row = (st.data ?? null) as unknown as { guardian: GuardianExtra | null } | null;
+      const map = new Map<string, EnrExtra>();
+      for (const e of (en.data ?? []) as unknown as EnrExtra[]) map.set(e.id, e);
+      setExtras({ forId: id, guardian: row?.guardian ?? null, enrollments: map });
     })();
     return () => {
       cancelled = true;
     };
   }, [id, version]);
 
+  const base = id ? dir.studentById.get(id) : undefined;
+  const ready = !!id && extras?.forId === id;
+
+  const siblings = useMemo(() => {
+    const gid = base?.guardian_id;
+    return gid ? dir.students.filter((x) => x.guardian_id === gid).length : 0;
+  }, [dir.students, base?.guardian_id]);
+
   const back = () => {
     if (window.history.length > 1) navigate(-1);
     else navigate('/crm');
   };
+  const close = () => navigate('/crm');
 
-  if (loading) return <p className="muted">Загрузка…</p>;
-  if (error) return <p className="error">Не удалось загрузить карточку: {error}</p>;
-  if (!student) {
+  const navButtons = (
+    <>
+      <button className="btn btn-sm back-btn" onClick={back}>← К списку</button>
+      <button className="btn btn-sm close-btn" onClick={close}>✕ Закрыть</button>
+    </>
+  );
+
+  if (dir.error) return <p className="error">Не удалось загрузить карточку: {dir.error}</p>;
+
+  // Справочник ещё грузится: сразу показываем рамку карточки.
+  if (dir.loading) {
     return (
-      <div>
-        <button className="btn btn-sm" onClick={back}>← К списку</button>
+      <div className="card-page">
+        {navButtons}
+        <span className="skeleton skeleton-title" />
+        <span className="skeleton skeleton-line" style={{ width: '30%' }} />
+        <div className="panel">
+          <span className="skeleton skeleton-line" style={{ width: '40%' }} />
+          <span className="skeleton skeleton-line" />
+          <span className="skeleton skeleton-line" />
+        </div>
+      </div>
+    );
+  }
+
+  if (!base) {
+    return (
+      <div className="card-page">
+        {navButtons}
         <p className="muted" style={{ marginTop: 16 }}>Ученик не найден или нет доступа.</p>
       </div>
     );
   }
 
-  const s = student;
+  const s = base;
   const g = s.guardian;
+  const gid = s.guardian_id;
   const age = ageYears(s.birth_date);
+  const enrollments = dir.enrollmentsByStudent.get(s.id) ?? [];
 
   const saveStudent = (field: string, extra?: (v: string | null) => Record<string, unknown>) =>
     async (v: string | null) => {
-      const err = await updateRow('students', s.id, { [field]: v, ...(extra ? extra(v) : {}) });
-      if (!err) reload();
+      const fields = { [field]: v, ...(extra ? extra(v) : {}) };
+      const err = await updateRow('students', s.id, fields);
+      if (!err) dir.patch('students', s.id, fields);
       return err;
     };
 
-  const savePhone = (table: 'students' | 'guardians', rowId: string, field: string) =>
-    async (v: string | null) => {
-      let value: string | null = null;
-      if (v !== null) {
-        value = normalizePhone(v);
-        if (!value) return PHONE_HINT;
-      }
-      const err = await updateRow(table, rowId, { [field]: value });
-      if (!err) reload();
-      return err;
-    };
-
-  const saveGuardian = (field: string) => async (v: string | null) => {
-    if (!g) return 'Родитель не найден';
-    const err = await updateRow('guardians', g.id, { [field]: v });
-    if (!err) reload();
+  const saveStudentPhone = async (v: string | null) => {
+    let value: string | null = null;
+    if (v !== null) {
+      value = normalizePhone(v);
+      if (!value) return PHONE_HINT;
+    }
+    const err = await updateRow('students', s.id, { phone: value });
+    if (!err) dir.patch('students', s.id, { phone: value });
     return err;
   };
 
-  const saveEnrollment = (enrId: string, field: string, convert?: (v: string | null) => unknown) =>
+  const saveGuardianCore = (field: 'full_name' | 'phone') => async (v: string | null) => {
+    if (!gid) return 'Родитель не найден';
+    let value: string | null = v;
+    if (field === 'phone' && v !== null) {
+      value = normalizePhone(v);
+      if (!value) return PHONE_HINT;
+    }
+    const err = await updateRow('guardians', gid, { [field]: value });
+    if (!err) dir.patchGuardian(gid, { [field]: value });
+    return err;
+  };
+
+  const patchExtraGuardian = (fields: Partial<GuardianExtra>) =>
+    setExtras((prev) => (prev && prev.guardian ? { ...prev, guardian: { ...prev.guardian, ...fields } } : prev));
+
+  const saveGuardianEmail = async (v: string | null) => {
+    if (!gid) return 'Родитель не найден';
+    const err = await updateRow('guardians', gid, { email: v });
+    if (!err) patchExtraGuardian({ email: v });
+    return err;
+  };
+
+  const patchExtraEnr = (enrId: string, fields: Partial<EnrExtra>) =>
+    setExtras((prev) => {
+      const cur = prev?.enrollments.get(enrId);
+      if (!prev || !cur) return prev;
+      const map = new Map(prev.enrollments);
+      map.set(enrId, { ...cur, ...fields });
+      return { ...prev, enrollments: map };
+    });
+
+  const saveEnrCore = (enrId: string, field: string, convert?: (v: string | null) => unknown) =>
     async (v: string | null) => {
-      const err = await updateRow('enrollments', enrId, { [field]: convert ? convert(v) : v });
-      if (!err) reload();
+      const value = convert ? convert(v) : v;
+      const err = await updateRow('enrollments', enrId, { [field]: value });
+      if (!err) dir.patch('enrollments', enrId, { [field]: value });
       return err;
     };
 
+  const saveEnrExtra = (enrId: string, field: keyof EnrExtra) => async (v: string | null) => {
+    const err = await updateRow('enrollments', enrId, { [field]: v });
+    if (!err) patchExtraEnr(enrId, { [field]: v } as Partial<EnrExtra>);
+    return err;
+  };
+
+  const phoneRaw = ready ? extras?.guardian?.phone_raw ?? null : null;
+
   return (
     <div className="card-page">
-      <button className="btn btn-sm back-btn" onClick={back}>← К списку</button>
+      {navButtons}
 
       <h1>{s.full_name}</h1>
       <p className="muted subtitle">
         {age !== null ? pluralYears(age) : s.birth_date_raw ? `дата рождения: ${s.birth_date_raw}` : 'возраст не указан'}
         {!isAdmin && ' · просмотр'}
       </p>
+      {extrasError && <p className="error">Не удалось догрузить подробности: {extrasError}</p>}
 
       <section className="panel">
         <h2>Ученик</h2>
@@ -273,7 +318,7 @@ export default function StudentCard() {
           canEdit={isAdmin}
           display={(v) => (v ? <a href={`tel:${v}`}>{formatPhone(v)}</a> : null)}
           hint="Заполняется у взрослых учеников. У детей контакт указан у родителя."
-          onSave={savePhone('students', s.id, 'phone')}
+          onSave={saveStudentPhone}
         />
       </section>
 
@@ -286,7 +331,7 @@ export default function StudentCard() {
               value={g.full_name}
               canEdit={isAdmin}
               hint={isAdmin && siblings > 1 ? `Этот родитель указан у ${siblings} детей, изменение коснётся всех.` : undefined}
-              onSave={saveGuardian('full_name')}
+              onSave={saveGuardianCore('full_name')}
             />
             <EditableField
               label="Телефон"
@@ -294,18 +339,28 @@ export default function StudentCard() {
               value={g.phone}
               canEdit={isAdmin}
               display={(v) => (v ? <a href={`tel:${v}`}>{formatPhone(v)}</a> : null)}
-              hint={g.phone_raw && g.phone_raw !== g.phone ? `Исходная запись: ${g.phone_raw}` : undefined}
-              onSave={savePhone('guardians', g.id, 'phone')}
+              hint={phoneRaw && phoneRaw !== g.phone ? `Исходная запись: ${phoneRaw}` : undefined}
+              onSave={saveGuardianCore('phone')}
             />
-            <EditableField
-              label="E-mail"
-              value={g.email}
-              canEdit={isAdmin}
-              onSave={saveGuardian('email')}
-            />
+            {ready ? (
+              <EditableField
+                label="E-mail"
+                value={extras?.guardian?.email ?? null}
+                canEdit={isAdmin}
+                onSave={saveGuardianEmail}
+              />
+            ) : (
+              <SkeletonRow label="E-mail" />
+            )}
           </>
         ) : isAdmin ? (
-          <AddGuardian studentId={s.id} onDone={reload} />
+          <AddGuardian
+            studentId={s.id}
+            onDone={() => {
+              void dir.refresh(['students']);
+              setVersion((v) => v + 1);
+            }}
+          />
         ) : (
           <p className="muted">Родитель не указан.</p>
         )}
@@ -315,14 +370,15 @@ export default function StudentCard() {
         <h2 className="section-title">Группы и зачисления</h2>
         {enrollments.length === 0 && <p className="muted">Зачислений нет.</p>}
         {enrollments.map((e) => {
-          const grp = groups.get(e.group_id);
+          const grp = dir.groupById.get(e.group_id);
+          const x = ready ? extras?.enrollments.get(e.id) : undefined;
           return (
             <div className="panel" key={e.id}>
               <h3>
                 {grp ? grp.name : 'Группа'}
                 {grp?.teacher && <span className="muted"> · {grp.teacher.full_name}</span>}
               </h3>
-              <p className="muted subtitle">Сезон {e.season}</p>
+              <p className="muted subtitle">{x ? `Сезон ${x.season}` : grp ? `Сезон ${grp.season}` : ''}</p>
               <EditableField
                 label="Статус"
                 kind="select"
@@ -330,6 +386,7 @@ export default function StudentCard() {
                 value={e.status}
                 required
                 canEdit={isAdmin}
+                display={(v) => (v ? STATUS_LABEL[v] ?? v : null)}
                 hint={
                   e.status === 'left' && !e.end_date
                     ? 'Укажите дату окончания: пока её нет, посещаемость для этого ученика отмечать нельзя.'
@@ -337,7 +394,7 @@ export default function StudentCard() {
                       ? 'Пока статус «Резерв», ученик в списках посещаемости не показывается.'
                       : undefined
                 }
-                onSave={saveEnrollment(e.id, 'status')}
+                onSave={saveEnrCore(e.id, 'status')}
               />
               <EditableField
                 label="Тип группы"
@@ -346,7 +403,8 @@ export default function StudentCard() {
                 value={e.is_primary ? 'true' : 'false'}
                 required
                 canEdit={isAdmin}
-                onSave={saveEnrollment(e.id, 'is_primary', (v) => v === 'true')}
+                display={(v) => (v === 'true' ? 'Основная группа' : v === 'false' ? 'Дополнительная группа' : null)}
+                onSave={saveEnrCore(e.id, 'is_primary', (v) => v === 'true')}
               />
               <EditableField
                 label="Начало занятий"
@@ -354,7 +412,7 @@ export default function StudentCard() {
                 value={e.start_date}
                 canEdit={isAdmin}
                 display={(v) => (v ? formatDate(v) : null)}
-                onSave={saveEnrollment(e.id, 'start_date')}
+                onSave={saveEnrCore(e.id, 'start_date')}
               />
               <EditableField
                 label="Окончание занятий"
@@ -362,45 +420,54 @@ export default function StudentCard() {
                 value={e.end_date}
                 canEdit={isAdmin}
                 display={(v) => (v ? formatDate(v) : null)}
-                onSave={saveEnrollment(e.id, 'end_date')}
+                onSave={saveEnrCore(e.id, 'end_date')}
               />
-              <EditableField
-                label="Пробное: дата"
-                kind="date"
-                value={e.trial_date}
-                canEdit={isAdmin}
-                display={(v) => (v ? formatDate(v) : null)}
-                onSave={saveEnrollment(e.id, 'trial_date')}
-              />
-              <EditableField
-                label="Пробное: примечание"
-                value={e.trial_note}
-                canEdit={isAdmin}
-                onSave={saveEnrollment(e.id, 'trial_note')}
-              />
-              {isAdmin && (
+              {x ? (
                 <>
                   <EditableField
-                    label="Договор №"
-                    value={e.contract_number}
-                    canEdit
-                    onSave={saveEnrollment(e.id, 'contract_number')}
-                  />
-                  <EditableField
-                    label="Дата договора"
+                    label="Пробное: дата"
                     kind="date"
-                    value={e.contract_date}
-                    canEdit
+                    value={x.trial_date}
+                    canEdit={isAdmin}
                     display={(v) => (v ? formatDate(v) : null)}
-                    onSave={saveEnrollment(e.id, 'contract_date')}
+                    onSave={saveEnrExtra(e.id, 'trial_date')}
                   />
                   <EditableField
-                    label="Заметки"
-                    kind="textarea"
-                    value={e.notes}
-                    canEdit
-                    onSave={saveEnrollment(e.id, 'notes')}
+                    label="Пробное: примечание"
+                    value={x.trial_note}
+                    canEdit={isAdmin}
+                    onSave={saveEnrExtra(e.id, 'trial_note')}
                   />
+                  {isAdmin && (
+                    <>
+                      <EditableField
+                        label="Договор №"
+                        value={x.contract_number}
+                        canEdit
+                        onSave={saveEnrExtra(e.id, 'contract_number')}
+                      />
+                      <EditableField
+                        label="Дата договора"
+                        kind="date"
+                        value={x.contract_date}
+                        canEdit
+                        display={(v) => (v ? formatDate(v) : null)}
+                        onSave={saveEnrExtra(e.id, 'contract_date')}
+                      />
+                      <EditableField
+                        label="Заметки"
+                        kind="textarea"
+                        value={x.notes}
+                        canEdit
+                        onSave={saveEnrExtra(e.id, 'notes')}
+                      />
+                    </>
+                  )}
+                </>
+              ) : (
+                <>
+                  <SkeletonRow label="Пробное" />
+                  {isAdmin && <SkeletonRow label="Договор и заметки" />}
                 </>
               )}
             </div>
