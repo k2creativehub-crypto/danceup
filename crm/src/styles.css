@@ -341,3 +341,64 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
   }
   .roster-actions { margin-top: 0; }
 }
+
+/* Заготовки на время загрузки */
+.skeleton {
+  display: block;
+  border-radius: 8px;
+  background: linear-gradient(90deg, var(--bg-alt) 25%, var(--line) 50%, var(--bg-alt) 75%);
+  background-size: 200% 100%;
+  animation: skeleton-shimmer 1.2s linear infinite;
+}
+.skeleton-line { height: 18px; margin: 10px 0; }
+.skeleton-title { height: 30px; width: 60%; margin-bottom: 16px; }
+@keyframes skeleton-shimmer {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+
+/* Создание группы: выбранные ученики */
+.create-students { border-top: 1px solid var(--line); padding-top: 12px; margin: 4px 0 12px; }
+.create-students-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.picked-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
+.picked-item { display: grid; grid-template-columns: 1fr auto; gap: 6px 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius); }
+.picked-name { grid-column: 1 / -1; font-weight: 500; }
+.picked-item select { min-height: 40px; }
+.add-panel { margin: 0; flex-basis: 100%; }
+
+/* Карточка ученика справа на большом экране; на телефоне отдельная страница */
+.close-btn { display: none; margin-bottom: 16px; }
+.row.is-selected { background: var(--primary-soft); }
+.split-card { min-width: 0; }
+@media (max-width: 1099px) {
+  .split.has-card .split-list { display: none; }
+}
+@media (min-width: 1100px) {
+  .content:has(.split.has-card) { max-width: 1500px; }
+  .split.has-card {
+    display: grid;
+    grid-template-columns: minmax(380px, 5fr) minmax(460px, 6fr);
+    gap: 24px;
+    align-items: start;
+  }
+  .split.has-card .split-list,
+  .split.has-card .split-card {
+    max-height: calc(100vh - 190px);
+    overflow-y: auto;
+    padding-right: 4px;
+  }
+  .split.has-card .back-btn { display: none; }
+  .split.has-card .close-btn { display: inline-flex; }
+  .split.has-card .card-page { max-width: none; }
+  .split.has-card .row-head { display: none; }
+  .split.has-card .row {
+    grid-template-columns: 1fr auto;
+    grid-template-areas: 'name open' 'age open' 'groups groups';
+    gap: 4px 12px;
+  }
+  .split.has-card .cell-name { grid-area: name; }
+  .split.has-card .cell-age { grid-area: age; }
+  .split.has-card .cell-groups { grid-area: groups; }
+  .split.has-card .cell-contact { display: none; }
+  .split.has-card .cell-open { grid-area: open; margin-top: 0; }
+}
