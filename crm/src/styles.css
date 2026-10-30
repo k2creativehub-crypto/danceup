@@ -546,3 +546,54 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
 @media (min-width: 800px) {
   .att-row { flex-wrap: nowrap; }
 }
+
+/* ===== Оплаты и счета ===== */
+.billing-page { max-width: 1000px; }
+.bill-tabs { display: flex; gap: 4px; flex-wrap: wrap; margin: 8px 0 12px; border-bottom: 1px solid var(--line); }
+.bill-tab { border: 0; background: transparent; font: inherit; padding: 10px 14px; min-height: 44px; cursor: pointer; color: var(--muted); border-bottom: 2px solid transparent; }
+.bill-tab.is-active { color: var(--ink); border-bottom-color: var(--primary, #2b6cb0); font-weight: 500; }
+.bill-month { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+.bill-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.bill-check { display: flex; align-items: center; gap: 6px; min-height: 44px; }
+.bill-scroll { overflow-x: auto; }
+.bill-table { width: 100%; border-collapse: collapse; margin: 8px 0 16px; }
+.bill-table th, .bill-table td { padding: 8px 10px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: middle; }
+.bill-table .num, .invoice-table .num { text-align: right; white-space: nowrap; }
+.bill-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.debt { color: var(--danger, #c53030); font-weight: 500; }
+.overpay { color: #2f855a; }
+.bill-warn { color: var(--danger, #c53030); font-weight: 500; margin: 6px 0; }
+.bill-problems { border: 1px solid var(--danger, #c53030); border-radius: 12px; padding: 10px 14px; margin: 12px 0; }
+.bill-onscreen { display: grid; gap: 4px; margin: 16px 0; padding: 12px 14px; background: var(--bg-alt); border-radius: 12px; }
+.bill-form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; margin: 12px 0; }
+.bill-form label { display: grid; gap: 4px; font-size: 14px; color: var(--muted); }
+.bill-picker { position: relative; }
+.bill-picker-list { list-style: none; margin: 4px 0 0; padding: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.bill-picker-list button { width: 100%; text-align: left; border: 0; background: transparent; font: inherit; padding: 10px 14px; min-height: 44px; cursor: pointer; }
+.bill-picker-list button:hover { background: var(--primary-soft); }
+.bill-picked { display: flex; align-items: center; gap: 12px; }
+.bill-history { list-style: none; padding: 0; margin: 0; }
+.bill-history li { display: flex; align-items: center; gap: 16px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+.bill-history li span { flex: 1; }
+.flash { color: #2f855a; }
+
+/* Счёт на экране */
+.invoice-sheet { background: #fff; color: #000; border: 1px solid var(--line); border-radius: 12px; padding: 24px; margin: 12px 0; max-width: 720px; }
+.invoice-org { font-size: 18px; font-weight: 600; }
+.invoice-req { font-size: 13px; color: #555; margin-bottom: 8px; }
+.invoice-title { margin: 12px 0 8px; font-size: 20px; }
+.invoice-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
+.invoice-table th, .invoice-table td { border: 1px solid #999; padding: 6px 10px; text-align: left; }
+.invoice-table tfoot td { font-weight: 600; }
+.invoice-warn { color: #c53030; font-weight: 500; }
+
+/* Печать: виден только #print-root; страница на счёт */
+#print-root { display: none; }
+@media print {
+  body.printing #root { display: none !important; }
+  body.printing #print-root { display: block; }
+  body.printing .invoice-sheet { border: 0; border-radius: 0; margin: 0; padding: 0; max-width: none; page-break-after: always; break-after: page; }
+  body.printing .invoice-sheet:last-child { page-break-after: auto; break-after: auto; }
+  .no-print { display: none !important; }
+  @page { size: A4; margin: 18mm; }
+}
