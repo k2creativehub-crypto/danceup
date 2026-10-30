@@ -1,35 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
-import { supabase } from '../supabase';
+import { Link, useParams } from 'react-router-dom';
 import { PencilIcon } from '../components/Icons';
 import { useAuth } from '../auth';
 import { ageYears, digits, formatPhone, pluralYears } from '../lib/format';
+import { useDirectory } from '../lib/store';
+import type { DirEnrollment } from '../lib/store';
+import StudentCard from './StudentCard';
 
-interface Guardian {
-  full_name: string | null;
-  phone: string | null;
-}
-interface Student {
-  id: string;
-  full_name: string;
-  birth_date: string | null;
-  birth_date_raw: string | null;
-  phone: string | null;
-  guardian: Guardian | null;
-}
-interface Group {
-  id: string;
-  name: string;
-  season: string;
-  is_archived: boolean;
-  teacher: { full_name: string } | null;
-}
-interface Enrollment {
-  student_id: string;
-  group_id: string;
-  status: 'active' | 'reserve' | 'left';
-  is_primary: boolean;
-}
+type Enrollment = DirEnrollment;
 
 const FILTER_KEY = 'crm-filters';
 
@@ -62,11 +40,8 @@ export default function Crm() {
   const { profile } = useAuth();
   const isAdmin = profile?.role === 'admin';
 
-  const [students, setStudents] = useState<Student[]>([]);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { id: selectedId } = useParams();
+  const { students, groups, groupById, enrollmentsByStudent, loading, error } = useDirectory();
 
   const [initial] = useState(loadFilters);
   const [query, setQuery] = useState(initial.query);
@@ -81,51 +56,6 @@ export default function Crm() {
       /* ничего страшного, фильтры просто не запомнятся */
     }
   }, [query, groupId, teacherName, status]);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const [st, gr, en] = await Promise.all([
-        supabase
-          .from('students')
-          .select('id, full_name, birth_date, birth_date_raw, phone, guardian:guardians(full_name, phone)')
-          .limit(5000),
-        supabase
-          .from('groups')
-          .select('id, name, season, is_archived, teacher:teachers(full_name)')
-          .limit(1000),
-        supabase
-          .from('enrollments_v')
-          .select('student_id, group_id, status, is_primary')
-          .limit(10000),
-      ]);
-      if (cancelled) return;
-      const firstError = st.error ?? gr.error ?? en.error;
-      if (firstError) {
-        setError(firstError.message);
-      } else {
-        setStudents((st.data ?? []) as unknown as Student[]);
-        setGroups((gr.data ?? []) as unknown as Group[]);
-        setEnrollments((en.data ?? []) as unknown as Enrollment[]);
-      }
-      setLoading(false);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const groupById = useMemo(() => new Map(groups.map((g) => [g.id, g])), [groups]);
-
-  const enrollmentsByStudent = useMemo(() => {
-    const map = new Map<string, Enrollment[]>();
-    for (const e of enrollments) {
-      const list = map.get(e.student_id) ?? [];
-      list.push(e);
-      map.set(e.student_id, list);
-    }
-    return map;
-  }, [enrollments]);
 
   const groupOptions = useMemo(
     () =>
@@ -172,7 +102,8 @@ export default function Crm() {
   let lastLetter = '';
 
   return (
-    <div>
+    <div className={`split${selectedId ? ' has-card' : ''}`}>
+      <div className="split-list">
       <h1>CRM</h1>
 
       <div className="filters">
@@ -237,7 +168,7 @@ export default function Crm() {
           return (
             <div key={s.id}>
               {showLetter && <div className="letter">{letter}</div>}
-              <div className="row">
+              <div className={`row${s.id === selectedId ? ' is-selected' : ''}`}>
                 <div className="cell-name">{s.full_name}</div>
                 <div className="cell-age muted">
                   {age !== null ? pluralYears(age) : s.birth_date_raw ? s.birth_date_raw : '—'}
@@ -274,6 +205,12 @@ export default function Crm() {
           );
         })}
       </div>
+      </div>
+      {selectedId && (
+        <div className="split-card">
+          <StudentCard key={selectedId} />
+        </div>
+      )}
     </div>
   );
 }
