@@ -6,6 +6,8 @@ import Crm from './pages/Crm';
 import { DirectoryProvider } from './lib/store';
 import Groups from './pages/Groups';
 import GroupPage from './pages/GroupPage';
+import Attendance from './pages/Attendance';
+import AttendanceGroup from './pages/AttendanceGroup';
 import Pricing from './pages/Pricing';
 import Soon from './pages/Soon';
 
@@ -40,7 +42,8 @@ export default function App() {
         <Route path="/students/:id" element={<Crm />} />
         <Route path="/groups" element={<Groups />} />
         <Route path="/groups/:id" element={<GroupPage />} />
-        <Route path="/attendance" element={<Soon title="Посещаемость" />} />
+        <Route path="/attendance" element={<Attendance />} />
+        <Route path="/attendance/:groupId" element={<AttendanceGroup />} />
         {isAdmin && <Route path="/pricing" element={<Pricing />} />}
         {isAdmin && <Route path="/billing" element={<Soon title="Оплаты и счета" />} />}
         {isAdmin && <Route path="/teachers" element={<Soon title="Преподаватели" />} />}
