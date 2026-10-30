@@ -402,3 +402,47 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
   .split.has-card .cell-contact { display: none; }
   .split.has-card .cell-open { grid-area: open; margin-top: 0; }
 }
+
+/* Цены и расписание */
+.pricing-page { max-width: 900px; }
+.filters-pricing { align-items: center; }
+.pricing-list { display: flex; flex-direction: column; gap: 8px; }
+.pricing-item { border: 1px solid var(--line); border-radius: 14px; overflow: hidden; }
+.pricing-item.is-open { border-color: var(--primary); }
+.pricing-item.is-archived { opacity: 0.7; }
+.pricing-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  color: var(--ink);
+  background: var(--bg);
+  border: 0;
+  padding: 12px 16px;
+  min-height: 44px;
+  cursor: pointer;
+}
+.pricing-head:hover { background: var(--primary-soft); }
+.pricing-title { font-weight: 500; }
+.pricing-summary { display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 14px; color: var(--muted); }
+.pricing-summary .warn { color: var(--danger); }
+.pricing-body { padding: 4px 16px 16px; border-top: 1px solid var(--line); background: var(--bg-alt); }
+.pricing-section { padding: 12px 0; }
+.pricing-section + .pricing-section { border-top: 1px solid var(--line); }
+.pricing-section h3 { font-size: 16px; font-weight: 500; margin: 0 0 8px; }
+.pricing-section p { margin: 0 0 6px; }
+.inline-form { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin: 8px 0; }
+.slot-grid { display: grid; grid-template-columns: 1fr; gap: 0 12px; }
+.slot-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; padding: 6px 0; }
+.slot-actions { display: flex; gap: 8px; }
+.price-history { margin-top: 10px; font-size: 14px; }
+.price-history summary { cursor: pointer; color: var(--muted); min-height: 32px; display: flex; align-items: center; }
+.price-history ul { margin: 4px 0 0; padding-left: 20px; }
+@media (min-width: 800px) {
+  .filters-pricing { grid-template-columns: 2fr 1.4fr auto; }
+  .pricing-head { flex-direction: row; justify-content: space-between; align-items: baseline; gap: 16px; }
+  .pricing-summary { justify-content: flex-end; text-align: right; flex: none; }
+  .slot-grid { grid-template-columns: 1.3fr 1fr 1fr 1.6fr; }
+}
