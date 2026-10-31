@@ -8,8 +8,8 @@ import Groups from './pages/Groups';
 import GroupPage from './pages/GroupPage';
 import Attendance from './pages/Attendance';
 import AttendanceGroup from './pages/AttendanceGroup';
-import Pricing from './pages/Pricing';
 import Billing from './pages/Billing';
+import Pricing from './pages/Pricing';
 import Soon from './pages/Soon';
 
 export default function App() {
