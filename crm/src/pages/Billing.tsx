@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../supabase';
 import StudentSearch from '../components/StudentSearch';
 import { SCHOOL } from '../lib/school';
-import { formatMonth, monthBounds, monthOf, shiftMonth } from '../lib/dates';
-import { formatDate, formatMoney, parseMoney, pluralYears, todayMinsk } from '../lib/format';
+import { formatDateGen, formatMonth, lastDayOfMonth, monthOf, shiftMonth } from '../lib/dates';
+import { formatDate, formatMoney, parseMoney, pluralLessons, rub, todayMinsk } from '../lib/format';
 import { useDirectory } from '../lib/store';
 
 type Tab = 'balance' | 'payment' | 'invoice' | 'group';
@@ -14,7 +14,7 @@ interface Balance {
   paid_kopecks: number;
   debt_kopecks: number;
 }
-interface InvoiceLine {
+interface InvoiceRow {
   student_id: string;
   student_name: string;
   birth_date: string | null;
@@ -22,10 +22,31 @@ interface InvoiceLine {
   guardian_name: string | null;
   group_id: string;
   group_name: string;
-  teacher_name: string;
+  teacher_name: string | null;
+  contract_number: string | null;
+  contract_date: string | null;
   lessons_count: number;
+  price_kopecks: number | null;
+  gross_kopecks: number;
+  attended_count: number;
+  absent_count: number;
+  sick_count: number;
+  trial_count: number;
+  carry_count: number;
+  carry_kopecks: number;
+  credit_in_count: number;
+  credit_in_kopecks: number;
+  sick_adjust_kopecks: number;
+  sick_pending: number;
   lessons_without_price: number;
-  amount_kopecks: number;
+  charge_kopecks: number;
+  single_price_kopecks: number | null;
+}
+interface SickDate {
+  group_id: string;
+  group_name: string;
+  lesson_date: string;
+  kind: 'regular' | 'single' | null;
 }
 interface Payment {
   id: string;
@@ -33,7 +54,38 @@ interface Payment {
   amount_kopecks: number;
 }
 
+// Данные акта. Сохраняются в архив целиком, чтобы акт можно было открыть позже.
+interface ActData {
+  ym: string;
+  studentName: string;
+  guardianName: string | null;
+  groups: { name: string; teacher: string }[];
+  contractNumber: string | null;
+  contractDate: string | null;
+  lessons: number; // занятий в абонементе
+  subscriptionKopecks: number; // стоимость абонемента
+  used: number; // использовано занятий
+  servicesKopecks: number; // общая стоимость услуг
+  carryCount: number; // перенесено на следующий период
+  carryKopecks: number;
+  creditInCount: number; // зачтено с прошлого периода
+  creditInKopecks: number;
+  sickAdjustKopecks: number; // доплата за «б» по разовой цене
+  dueKopecks: number; // сумма к оплате за месяц
+  debtKopecks: number; // задолженность на конец месяца
+  actDate: string;
+  issuedAt: string;
+}
+interface ArchiveRow {
+  student_id: string;
+  month: string;
+  total_kopecks: number;
+  payload: ActData;
+  generated_at: string;
+}
+
 const byName = (a: string, b: string) => a.localeCompare(b, 'ru', { numeric: true });
+const firstDay = (ym: string) => `${ym}-01`;
 
 function Debt({ kopecks }: { kopecks: number }) {
   if (kopecks > 0) return <span className="debt-pos">долг {formatMoney(kopecks)}</span>;
@@ -41,114 +93,203 @@ function Debt({ kopecks }: { kopecks: number }) {
   return <span className="muted">нет долга</span>;
 }
 
-// ---------- Печатная форма счёта ----------
+// Строки одного ученика за месяц, где что-то происходит (занятия, возврат, отметки).
+function studentRows(rows: InvoiceRow[], studentId: string): InvoiceRow[] {
+  return rows.filter((r) => r.student_id === studentId);
+}
 
-function InvoiceSheet({ lines, ym }: { lines: InvoiceLine[]; ym: string }) {
-  const first = lines[0];
-  const total = lines.reduce((s, l) => s + l.amount_kopecks, 0);
-  const noPrice = lines.reduce((s, l) => s + l.lessons_without_price, 0);
-  const requisites = [
-    SCHOOL.legalName,
-    SCHOOL.unp ? `УНП ${SCHOOL.unp}` : '',
-    SCHOOL.address,
-    SCHOOL.account ? `р/с ${SCHOOL.account}` : '',
-    SCHOOL.bank,
-    SCHOOL.phone,
-    SCHOOL.email,
-  ].filter(Boolean);
+function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData {
+  const sum = (f: (r: InvoiceRow) => number) => rows.reduce((s, r) => s + f(r), 0);
+  const first = rows[0];
+  const lessons = sum((r) => r.lessons_count);
+  const gross = sum((r) => r.gross_kopecks);
+  const carryCount = sum((r) => r.carry_count);
+  const carryKopecks = sum((r) => r.carry_kopecks);
+  const adjust = sum((r) => r.sick_adjust_kopecks);
+  const creditIn = sum((r) => r.credit_in_kopecks);
+  const contractRow = rows.find((r) => r.contract_number);
+  return {
+    ym,
+    studentName: first.student_name,
+    guardianName: first.guardian_name,
+    groups: rows.map((r) => ({ name: r.group_name, teacher: r.teacher_name ?? '' })),
+    contractNumber: contractRow?.contract_number ?? null,
+    contractDate: contractRow?.contract_date ?? null,
+    lessons,
+    subscriptionKopecks: gross,
+    used: lessons - carryCount,
+    servicesKopecks: gross - carryKopecks + adjust,
+    carryCount,
+    carryKopecks,
+    creditInCount: sum((r) => r.credit_in_count),
+    creditInKopecks: creditIn,
+    sickAdjustKopecks: adjust,
+    dueKopecks: sum((r) => r.charge_kopecks),
+    debtKopecks: Math.max(debtKopecks, 0),
+    actDate: lastDayOfMonth(ym),
+    issuedAt: todayMinsk(),
+  };
+}
+
+// Что мешает сформировать акт ученика
+function blockers(rows: InvoiceRow[]): string[] {
+  const out: string[] = [];
+  const noPrice = rows.reduce((s, r) => s + r.lessons_without_price, 0);
+  const pending = rows.reduce((s, r) => s + r.sick_pending, 0);
+  if (noPrice > 0) out.push(`у ${noPrice} занятий не задана цена`);
+  if (pending > 0) out.push(`нужно выбрать цену для «б»: ${pending}`);
+  return out;
+}
+
+async function saveToArchive(items: { studentId: string; act: ActData }[]): Promise<string | null> {
+  if (items.length === 0) return null;
+  const { error } = await supabase.from('invoice_archive').upsert(
+    items.map((i) => ({
+      student_id: i.studentId,
+      month: firstDay(i.act.ym),
+      total_kopecks: i.act.dueKopecks,
+      payload: i.act,
+      generated_at: new Date().toISOString(),
+    })),
+    { onConflict: 'student_id,month' },
+  );
+  return error ? error.message : null;
+}
+
+// ---------- Печатная форма: акт приёмки оказанных услуг ----------
+
+function ActSheet({ a }: { a: ActData }) {
+  const blank = (v: string | null, empty: string) => (v && v.trim() ? v : empty);
+  const customer = a.guardianName ?? a.studentName;
+  const groupsText = a.groups.map((g) => (g.teacher ? `${g.name} (преподаватель ${g.teacher})` : g.name)).join('; ');
 
   return (
-    <div className="invoice-sheet">
-      <div className="invoice-school">
-        <div className="invoice-school-name">{SCHOOL.name}</div>
-        {requisites.map((r) => (
-          <div key={r} className="invoice-req">
-            {r}
-          </div>
-        ))}
+    <div className="act-sheet">
+      <div className="act-title">АКТ</div>
+      <div className="act-subtitle">
+        приёмки оказанных услуг к договору №{blank(a.contractNumber, '____')} от{' '}
+        {a.contractDate ? formatDate(a.contractDate) : '_________'}
       </div>
-      <h2 className="invoice-title">Счёт за {formatMonth(ym).toLowerCase()}</h2>
-      <div className="invoice-meta">
-        <div>
-          <span className="muted">Ученик: </span>
-          <strong>{first.student_name}</strong>
-        </div>
-        {first.age_years !== null && (
-          <div>
-            <span className="muted">Возраст: </span>
-            {pluralYears(first.age_years)}
-          </div>
-        )}
-        <div>
-          <span className="muted">Дата формирования: </span>
-          {formatDate(todayMinsk())}
-        </div>
+      <div className="act-place">
+        <span>{SCHOOL.city}</span>
+        <span>{formatDateGen(a.actDate)}</span>
       </div>
-      <table className="invoice-table">
-        <thead>
-          <tr>
-            <th>Группа</th>
-            <th>Преподаватель</th>
-            <th className="num">Занятий</th>
-            <th className="num">Сумма</th>
-          </tr>
-        </thead>
-        <tbody>
-          {lines.map((l) => (
-            <tr key={l.group_id}>
-              <td>{l.group_name}</td>
-              <td>{l.teacher_name}</td>
-              <td className="num">{l.lessons_count}</td>
-              <td className="num">{formatMoney(l.amount_kopecks)}</td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={3}>
-              <strong>Итого</strong>
-            </td>
-            <td className="num">
-              <strong>{formatMoney(total)}</strong>
-            </td>
-          </tr>
-        </tfoot>
-      </table>
-      {noPrice > 0 && (
-        <p className="error no-print">
-          Для {noPrice} занятий не задана цена, они не вошли в сумму. Задайте цену в разделе «Цены и расписание».
-        </p>
-      )}
+
+      <p className="act-p">
+        {SCHOOL.fullName}, именуемое в дальнейшем «Исполнитель», действующее на основании Устава (свидетельство о
+        государственной регистрации № {SCHOOL.registration}), с одной стороны, и {customer}, действующий(ая) от себя
+        лично{a.guardianName ? ` (в интересах несовершеннолетнего) ${a.studentName}` : ''} именуемый(ая) в дальнейшем
+        «Заказчик» (Термин Ученик применяется к Заказчику либо к несовершеннолетнему, чьи интересы представляет
+        Заказчик), по отдельности именуемые в дальнейшем «Сторона», а совместно «Стороны» составили настоящий акт о том,
+        что:
+      </p>
+
+      <ul className="act-list">
+        <li>
+          Исполнитель сдал, а Заказчик принял услуги по обучению танцам за {formatMonth(a.ym).toLowerCase()} года.
+          Группа: {groupsText}.
+        </li>
+        <li>
+          Заказчиком приобретен абонемент стоимостью {rub(a.subscriptionKopecks)} без НДС, включающий{' '}
+          {pluralLessons(a.lessons)}.
+          {a.creditInCount > 0 &&
+            ` В счёт абонемента зачтено занятий, перенесённых с предыдущего периода: ${a.creditInCount}, стоимостью ${rub(a.creditInKopecks)} без НДС.`}
+        </li>
+        <li>
+          Заказчик посетил {pluralLessons(a.used)}. Абонемент использован {a.carryCount === 0 ? '' : 'не '}полностью.
+          Общая стоимость услуг {rub(a.servicesKopecks)} без НДС. Перенесено на следующий период{' '}
+          {pluralLessons(a.carryCount)}, стоимостью {rub(a.carryKopecks)} без НДС.
+          {a.sickAdjustKopecks !== 0 &&
+            ` Занятия по болезни оплачены по цене разового занятия, разница составила ${rub(a.sickAdjustKopecks)} без НДС.`}
+        </li>
+        <li>
+          {a.debtKopecks > 0
+            ? `Стоимость абонемента оплачена до момента подписания настоящего акта не в полном объёме (имеется задолженность ${rub(a.debtKopecks)} без НДС).`
+            : 'Стоимость абонемента оплачена до момента подписания настоящего акта в полном объёме.'}
+        </li>
+        <li>Услуги оказаны надлежащим образом и в срок, стороны претензий друг к другу не имеют.</li>
+        <li>Настоящий акт составлен Исполнителем в одностороннем порядке согласно п. 3.7. договора на оказание услуг.</li>
+      </ul>
+
+      <div className="act-executor">
+        <div className="act-executor-title">ИСПОЛНИТЕЛЬ</div>
+        <div>{SCHOOL.shortName}</div>
+        <div>{SCHOOL.address}</div>
+        <div>УНП {SCHOOL.unp}</div>
+        <div>Банковские реквизиты:</div>
+        <div>р/с {SCHOOL.account}</div>
+        <div>в {SCHOOL.bank},</div>
+        <div>адрес банка: {SCHOOL.bankAddress}</div>
+        <div>BIC: {SCHOOL.bic}</div>
+        <div className="act-sign">_________________ {SCHOOL.director}</div>
+      </div>
     </div>
   );
 }
 
-// Строки счёта ученика: только группы, где за месяц есть занятия.
-function studentInvoice(lines: InvoiceLine[], studentId: string): InvoiceLine[] {
-  return lines.filter((l) => l.student_id === studentId && (l.lessons_count > 0 || l.lessons_without_price > 0));
-}
-
 // ---------- Вкладка «Баланс» ----------
 
-function BalanceTab({
-  rows,
-  loading,
-  error,
-  ym,
-  onPay,
-  onInvoice,
-}: {
-  rows: Balance[] | null;
-  loading: boolean;
-  error: string | null;
-  ym: string;
-  onPay: (id: string) => void;
-  onInvoice: (id: string) => void;
-}) {
+function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) => void; onInvoice: (id: string) => void }) {
   const dir = useDirectory();
+  const [rows, setRows] = useState<Balance[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [startYm, setStartYm] = useState<string | null>(null);
+  const [startDraft, setStartDraft] = useState('');
+  const [settingsErr, setSettingsErr] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
   const [query, setQuery] = useState('');
   const [groupId, setGroupId] = useState('');
   const [debtOnly, setDebtOnly] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setRows(null);
+    supabase.rpc('student_balances', { p_to: lastDayOfMonth(ym) }).then(({ data, error: e }) => {
+      if (!alive) return;
+      if (e) return setError(e.message);
+      setError(null);
+      setRows((data ?? []) as Balance[]);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [ym, reload]);
+
+  useEffect(() => {
+    let alive = true;
+    supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'billing_start')
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!alive) return;
+        const v = (data as { value: string } | null)?.value;
+        if (v) {
+          setStartYm(v.slice(0, 7));
+          setStartDraft(v.slice(0, 7));
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const saveStart = async () => {
+    if (!/^\d{4}-\d{2}$/.test(startDraft)) return setSettingsErr('Выберите месяц');
+    if (
+      !window.confirm(
+        `Начисления и возвраты будут считаться с месяца «${formatMonth(startDraft).toLowerCase()}». Все балансы пересчитаются. Продолжить?`,
+      )
+    )
+      return;
+    setSettingsErr(null);
+    const { error: e } = await supabase
+      .from('app_settings')
+      .upsert({ key: 'billing_start', value: firstDay(startDraft) }, { onConflict: 'key' });
+    if (e) return setSettingsErr(e.message);
+    setReload((v) => v + 1);
+  };
 
   const groupOptions = useMemo(
     () => dir.groups.filter((g) => !g.is_archived).sort((a, b) => byName(a.name, b.name)),
@@ -164,7 +305,7 @@ function BalanceTab({
         const enrs = (dir.enrollmentsByStudent.get(b.student_id) ?? []).filter((e) => e.status !== 'reserve');
         return { b, st, enrs };
       })
-      .filter((r) => r.st && (r.enrs.length > 0 || r.b.charged_kopecks > 0 || r.b.paid_kopecks > 0))
+      .filter((r) => r.st && (r.enrs.length > 0 || r.b.charged_kopecks !== 0 || r.b.paid_kopecks > 0))
       .filter((r) => !groupId || r.enrs.some((e) => e.group_id === groupId))
       .filter((r) => !debtOnly || r.b.debt_kopecks > 0)
       .filter(
@@ -181,6 +322,23 @@ function BalanceTab({
 
   return (
     <div>
+      <div className="panel start-panel">
+        <div className="start-row">
+          <label className="field">
+            <span>Начисления ведутся с месяца</span>
+            <input type="month" value={startDraft} onChange={(e) => setStartDraft(e.target.value)} />
+          </label>
+          <button type="button" className="btn btn-sm" onClick={saveStart} disabled={!startYm || startDraft === startYm}>
+            Сохранить
+          </button>
+        </div>
+        <p className="muted small">
+          Месяцы до этой даты не начисляются, и возвраты с предыдущего месяца в первом месяце не применяются. Оплаты
+          учитываются любые.
+        </p>
+        {settingsErr && <p className="error">{settingsErr}</p>}
+      </div>
+
       <div className="filters filters-balance">
         <input
           className="search"
@@ -204,7 +362,7 @@ function BalanceTab({
       </div>
 
       {error && <p className="error">Не удалось загрузить баланс: {error}</p>}
-      {loading && !rows && (
+      {!rows && !error && (
         <div>
           <span className="skeleton skeleton-line" />
           <span className="skeleton skeleton-line" />
@@ -248,7 +406,7 @@ function BalanceTab({
                     Оплата
                   </button>
                   <button type="button" className="btn btn-sm" onClick={() => onInvoice(b.student_id)}>
-                    Счёт
+                    Акт
                   </button>
                 </div>
               </div>
@@ -262,15 +420,7 @@ function BalanceTab({
 
 // ---------- Вкладка «Оплата» ----------
 
-function PaymentTab({
-  studentId,
-  onPick,
-  onChanged,
-}: {
-  studentId: string | null;
-  onPick: (id: string | null) => void;
-  onChanged: () => void;
-}) {
+function PaymentTab({ studentId, onPick }: { studentId: string | null; onPick: (id: string | null) => void }) {
   const dir = useDirectory();
   const today = todayMinsk();
   const [payments, setPayments] = useState<Payment[] | null>(null);
@@ -328,7 +478,6 @@ function PaymentTab({
     if (error) return setErr(error.message);
     setAmount('');
     setReload((v) => v + 1);
-    onChanged();
   };
 
   const remove = async (p: Payment) => {
@@ -338,7 +487,6 @@ function PaymentTab({
     if (error) return setErr(error.message);
     if (!data || data.length === 0) return setErr('Не удалось удалить: нет прав или запись не найдена');
     setReload((v) => v + 1);
-    onChanged();
   };
 
   const paidTotal = (payments ?? []).reduce((s, p) => s + p.amount_kopecks, 0);
@@ -403,38 +551,95 @@ function PaymentTab({
   );
 }
 
-// ---------- Вкладка «Счёт ребёнка» ----------
+// ---------- Вкладка «Акт ученика» ----------
 
-function InvoiceTab({
-  studentId,
-  onPick,
-  ym,
-  lines,
-  loading,
-  error,
-  balance,
-}: {
-  studentId: string | null;
-  onPick: (id: string | null) => void;
-  ym: string;
-  lines: InvoiceLine[] | null;
-  loading: boolean;
-  error: string | null;
-  balance: Balance | null;
-}) {
+function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPick: (id: string | null) => void; ym: string }) {
   const dir = useDirectory();
+  const [rows, setRows] = useState<InvoiceRow[] | null>(null);
+  const [sick, setSick] = useState<SickDate[]>([]);
+  const [debt, setDebt] = useState<Balance | null>(null);
+  const [archive, setArchive] = useState<ArchiveRow[]>([]);
+  const [viewing, setViewing] = useState<ActData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    if (!studentId) return;
+    let alive = true;
+    setRows(null);
+    setViewing(null);
+    (async () => {
+      const [inv, sd, ba, ar] = await Promise.all([
+        supabase.rpc('month_invoices', { p_month: firstDay(ym), p_group_id: null, p_student_id: studentId }),
+        supabase.rpc('sick_dates', { p_month: firstDay(ym), p_student_id: studentId }),
+        supabase.rpc('student_balances', { p_to: lastDayOfMonth(ym) }),
+        supabase
+          .from('invoice_archive')
+          .select('student_id, month, total_kopecks, payload, generated_at')
+          .eq('student_id', studentId)
+          .order('month', { ascending: false }),
+      ]);
+      if (!alive) return;
+      const firstError = inv.error ?? sd.error ?? ba.error ?? ar.error;
+      if (firstError) return setError(firstError.message);
+      setError(null);
+      setRows((inv.data ?? []) as InvoiceRow[]);
+      setSick((sd.data ?? []) as SickDate[]);
+      setDebt(((ba.data ?? []) as Balance[]).find((b) => b.student_id === studentId) ?? null);
+      setArchive((ar.data ?? []) as ArchiveRow[]);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [studentId, ym, reload]);
 
   if (!studentId) {
     return (
       <div className="panel no-print">
-        <h2>Счёт ребёнка</h2>
+        <h2>Акт ученика</h2>
         <StudentSearch students={dir.students} excludeIds={new Set()} onPick={(s) => onPick(s.id)} autoFocus />
       </div>
     );
   }
 
   const st = dir.studentById.get(studentId);
-  const mine = lines ? studentInvoice(lines, studentId) : [];
+  const mine = rows ? studentRows(rows, studentId) : [];
+  const stop = blockers(mine);
+  const act = mine.length > 0 ? buildAct(mine, ym, debt?.debt_kopecks ?? 0) : null;
+  const shown = viewing ?? act;
+
+  // Выбор по «б» нужен только в группах, где «б» за месяц не больше 4
+  const sickByGroup = new Map<string, number>();
+  for (const r of mine) sickByGroup.set(r.group_id, r.sick_count);
+  const choosable = sick.filter((d) => (sickByGroup.get(d.group_id) ?? 0) <= 4);
+  const unpaidGroups = mine.filter((r) => r.sick_count > 4);
+
+  const choose = async (d: SickDate, kind: 'regular' | 'single') => {
+    setBusy(true);
+    setError(null);
+    const { error: e } = await supabase
+      .from('sick_pricing')
+      .upsert(
+        { group_id: d.group_id, student_id: studentId, lesson_date: d.lesson_date, kind },
+        { onConflict: 'group_id,student_id,lesson_date' },
+      );
+    setBusy(false);
+    if (e) return setError(e.message);
+    setReload((v) => v + 1);
+  };
+
+  const print = async () => {
+    if (!act) return;
+    setBusy(true);
+    const err = await saveToArchive([{ studentId, act }]);
+    setBusy(false);
+    if (err) setError(`Акт не сохранён в архив: ${err}`);
+    window.print();
+    if (!err) setReload((v) => v + 1);
+  };
+
+  const priceFor = (d: SickDate) => mine.find((r) => r.group_id === d.group_id);
 
   return (
     <div>
@@ -444,50 +649,158 @@ function InvoiceTab({
           <button type="button" className="btn btn-sm" onClick={() => onPick(null)}>
             Сменить ученика
           </button>
-          {mine.length > 0 && (
-            <button type="button" className="btn btn-primary btn-sm" onClick={() => window.print()}>
-              Печать / PDF
-            </button>
+          {viewing ? (
+            <>
+              <button type="button" className="btn btn-sm" onClick={() => setViewing(null)}>
+                Закрыть сохранённый акт
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={() => window.print()}>
+                Печать / PDF
+              </button>
+            </>
+          ) : (
+            act && (
+              <button type="button" className="btn btn-primary btn-sm" onClick={print} disabled={busy || stop.length > 0}>
+                Сформировать PDF
+              </button>
+            )
           )}
         </div>
       </div>
-      {error && <p className="error no-print">Не удалось загрузить счёт: {error}</p>}
-      {loading && !lines && <span className="skeleton skeleton-line no-print" style={{ width: '60%' }} />}
-      {lines && mine.length === 0 && (
+
+      {error && <p className="error no-print">{error}</p>}
+      {!rows && !error && <span className="skeleton skeleton-line no-print" style={{ width: '60%' }} />}
+      {rows && mine.length === 0 && !viewing && (
         <p className="muted no-print">
-          За {formatMonth(ym).toLowerCase()} у ученика нет оплачиваемых занятий: нет отметок «+» или он не состоит в группе.
+          За {formatMonth(ym).toLowerCase()} у ученика нет занятий по расписанию: он не состоит в группе или у группы нет
+          расписания.
         </p>
       )}
-      {mine.length > 0 && <InvoiceSheet lines={mine} ym={ym} />}
-      {balance && (
+
+      {!viewing && stop.length > 0 && (
+        <p className="error no-print">Акт нельзя сформировать: {stop.join('; ')}.</p>
+      )}
+
+      {!viewing && choosable.length > 0 && (
         <div className="panel no-print">
-          <h3>Баланс на конец периода</h3>
-          <p>
-            Начислено всего: {formatMoney(balance.charged_kopecks)} · оплачено: {formatMoney(balance.paid_kopecks)} ·{' '}
-            <Debt kopecks={balance.debt_kopecks} />
+          <h3>Как считать «б» (болезнь)?</h3>
+          <p className="muted small">
+            За месяц «б» не больше 4. Для каждого занятия выберите цену: разовую или регулярную. Если «б» больше 4, они не
+            оплачиваются и переносятся на следующий месяц, выбор не нужен.
           </p>
-          <p className="muted small">Баланс считается нарастающим итогом и в печатный счёт не попадает.</p>
+          {choosable.map((d) => {
+            const r = priceFor(d);
+            return (
+              <div key={`${d.group_id}-${d.lesson_date}`} className="sick-row">
+                <div>
+                  {formatDate(d.lesson_date)}
+                  <span className="muted small"> · {d.group_name}</span>
+                </div>
+                <div className="sick-choice">
+                  <button
+                    type="button"
+                    className={`btn btn-sm${d.kind === 'single' ? ' btn-primary' : ''}`}
+                    disabled={busy || r?.single_price_kopecks == null}
+                    onClick={() => choose(d, 'single')}
+                    title={r?.single_price_kopecks == null ? 'У группы не задана разовая цена' : ''}
+                  >
+                    Разовое{r?.single_price_kopecks != null ? ` · ${formatMoney(r.single_price_kopecks)}` : ''}
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm${d.kind === 'regular' ? ' btn-primary' : ''}`}
+                    disabled={busy}
+                    onClick={() => choose(d, 'regular')}
+                  >
+                    Регулярное{r?.price_kopecks != null ? ` · ${formatMoney(r.price_kopecks)}` : ''}
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {!viewing && unpaidGroups.length > 0 && (
+        <p className="muted small no-print">
+          «б» больше 4 за месяц: {unpaidGroups.map((r) => `${r.group_name} (${r.sick_count})`).join(', ')}. Они не
+          оплачиваются, {pluralLessons(unpaidGroups.reduce((s, r) => s + r.sick_count, 0))} перенесутся на следующий месяц.
+        </p>
+      )}
+
+      {shown && <ActSheet a={shown} />}
+
+      {!viewing && act && (
+        <div className="panel no-print">
+          <h3>Расчёт за {formatMonth(ym).toLowerCase()}</h3>
+          <p className="small">
+            Занятий по расписанию: {act.lessons} · абонемент {formatMoney(act.subscriptionKopecks)}
+            {act.creditInKopecks > 0 && <> · зачтено с прошлого месяца −{formatMoney(act.creditInKopecks)}</>}
+            {act.sickAdjustKopecks !== 0 && <> · доплата за «б» {formatMoney(act.sickAdjustKopecks)}</>}
+          </p>
+          <p>
+            <strong>К оплате за месяц: {formatMoney(act.dueKopecks)}</strong>
+            {debt && (
+              <>
+                {' '}
+                · баланс на конец месяца: <Debt kopecks={debt.debt_kopecks} />
+              </>
+            )}
+          </p>
+          <p className="muted small">Баланс и расчёт считаются на сегодняшних данных и могут измениться, если поправить отметки.</p>
+        </div>
+      )}
+
+      {archive.length > 0 && (
+        <div className="panel no-print">
+          <h3>Сохранённые акты</h3>
+          <p className="muted small">Сумма и данные акта сохраняются при каждом формировании PDF.</p>
+          <div className="pay-list">
+            {archive.map((a) => (
+              <div key={a.month} className="pay-row">
+                <span>{formatMonth(monthOf(a.month))}</span>
+                <strong>{formatMoney(a.total_kopecks)}</strong>
+                <span className="muted small">от {formatDate(a.generated_at.slice(0, 10))}</span>
+                <button type="button" className="btn btn-sm" onClick={() => setViewing(a.payload)}>
+                  Открыть
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
   );
 }
 
-// ---------- Вкладка «Счета группы» ----------
+// ---------- Вкладка «Акты группы» ----------
 
-function GroupTab({
-  ym,
-  lines,
-  loading,
-  error,
-}: {
-  ym: string;
-  lines: InvoiceLine[] | null;
-  loading: boolean;
-  error: string | null;
-}) {
+function GroupTab({ ym, onOpen }: { ym: string; onOpen: (id: string) => void }) {
   const dir = useDirectory();
   const [groupId, setGroupId] = useState('');
+  const [rows, setRows] = useState<InvoiceRow[] | null>(null);
+  const [balances, setBalances] = useState<Balance[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    let alive = true;
+    setRows(null);
+    (async () => {
+      const [inv, ba] = await Promise.all([
+        supabase.rpc('month_invoices', { p_month: firstDay(ym), p_group_id: null, p_student_id: null }),
+        supabase.rpc('student_balances', { p_to: lastDayOfMonth(ym) }),
+      ]);
+      if (!alive) return;
+      const firstError = inv.error ?? ba.error;
+      if (firstError) return setError(firstError.message);
+      setError(null);
+      setRows((inv.data ?? []) as InvoiceRow[]);
+      setBalances((ba.data ?? []) as Balance[]);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [ym]);
 
   const groupOptions = useMemo(
     () => dir.groups.filter((g) => !g.is_archived).sort((a, b) => byName(a.name, b.name)),
@@ -495,15 +808,28 @@ function GroupTab({
   );
 
   const members = useMemo(() => {
-    if (!lines || !groupId) return [];
-    return lines
-      .filter((l) => l.group_id === groupId)
-      .map((l) => ({ id: l.student_id, name: l.student_name, own: l }))
-      .sort((x, y) => byName(x.name, y.name));
-  }, [lines, groupId]);
+    if (!rows || !groupId) return [];
+    const ids = [...new Set<string>(rows.filter((r) => r.group_id === groupId).map((r) => r.student_id))];
+    return ids
+      .map((id) => {
+        const all = studentRows(rows, id);
+        const own = all.find((r) => r.group_id === groupId);
+        const debt = balances?.find((b) => b.student_id === id)?.debt_kopecks ?? 0;
+        return { id, name: own?.student_name ?? '', own, all, stop: blockers(all), act: buildAct(all, ym, debt) };
+      })
+      .sort((a, b) => byName(a.name, b.name));
+  }, [rows, groupId, balances, ym]);
 
-  const toPrint = members.filter((m) => lines && studentInvoice(lines, m.id).length > 0);
-  const withoutPrice = members.filter((m) => (m.own?.lessons_without_price ?? 0) > 0).length;
+  const ready = members.filter((m) => m.stop.length === 0 && m.act.lessons + m.act.creditInCount > 0);
+  const blocked = members.filter((m) => m.stop.length > 0);
+
+  const printAll = async () => {
+    setBusy(true);
+    const err = await saveToArchive(ready.map((m) => ({ studentId: m.id, act: m.act })));
+    setBusy(false);
+    if (err) setError(`Акты не сохранены в архив: ${err}`);
+    window.print();
+  };
 
   return (
     <div>
@@ -520,50 +846,50 @@ function GroupTab({
           </select>
         </label>
 
-        {error && <p className="error">Не удалось загрузить данные: {error}</p>}
-        {loading && !lines && <span className="skeleton skeleton-line" style={{ width: '60%' }} />}
+        {error && <p className="error">{error}</p>}
+        {!rows && !error && <span className="skeleton skeleton-line" style={{ width: '60%' }} />}
 
-        {lines && groupId && (
+        {rows && groupId && (
           <>
             <p className="muted count">
-              За {formatMonth(ym).toLowerCase()}: счетов к печати {toPrint.length} из {members.length}
-              {withoutPrice > 0 && <span className="error"> · у {withoutPrice} учеников есть занятия без цены</span>}
+              За {formatMonth(ym).toLowerCase()}: актов к печати {ready.length} из {members.length}
+              {blocked.length > 0 && <span className="error"> · требуют внимания: {blocked.length}</span>}
             </p>
-            {members.length === 0 && <p className="muted">В группе нет учеников со счётом за этот месяц.</p>}
+            {members.length === 0 && <p className="muted">В группе нет занятий за этот месяц.</p>}
             <div className="bal-list">
-              {members.map((m) => {
-                const own = m.own;
-                const allLines = lines ? studentInvoice(lines, m.id) : [];
-                const total = allLines.reduce((s, l) => s + l.amount_kopecks, 0);
-                return (
-                  <div key={m.id} className="bal-row bal-row-group">
-                    <div className="bal-name">
-                      <strong>{m.name}</strong>
-                      {allLines.length > 1 && <div className="muted small">в счёте несколько групп</div>}
-                    </div>
-                    <div className="bal-num">
-                      <span className="muted small">занятий в группе</span>
-                      <span>{own?.lessons_count ?? 0}</span>
-                    </div>
-                    <div className="bal-num">
-                      <span className="muted small">сумма счёта</span>
-                      <span>{formatMoney(total)}</span>
-                    </div>
-                    <div className="bal-num">
-                      {(own?.lessons_without_price ?? 0) > 0 ? (
-                        <span className="error small">нет цены: {own?.lessons_without_price}</span>
-                      ) : allLines.length === 0 ? (
-                        <span className="muted small">нет занятий, счёт не печатается</span>
-                      ) : null}
-                    </div>
+              {members.map((m) => (
+                <div key={m.id} className="bal-row bal-row-group">
+                  <div className="bal-name">
+                    <strong>{m.name}</strong>
+                    {m.all.length > 1 && <div className="muted small">в акте несколько групп</div>}
                   </div>
-                );
-              })}
+                  <div className="bal-num">
+                    <span className="muted small">занятий в группе</span>
+                    <span>{m.own?.lessons_count ?? 0}</span>
+                  </div>
+                  <div className="bal-num">
+                    <span className="muted small">к оплате за месяц</span>
+                    <span>{formatMoney(m.act.dueKopecks)}</span>
+                  </div>
+                  <div className="bal-num">
+                    {m.stop.length > 0 ? (
+                      <span className="error small">{m.stop.join('; ')}</span>
+                    ) : (
+                      <span className="muted small">готов к печати</span>
+                    )}
+                    {m.stop.length > 0 && (
+                      <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => onOpen(m.id)}>
+                        Открыть
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
             </div>
-            {toPrint.length > 0 && (
+            {ready.length > 0 && (
               <div className="field-actions" style={{ marginTop: 16 }}>
-                <button type="button" className="btn btn-primary" onClick={() => window.print()}>
-                  Печать всех счетов ({toPrint.length})
+                <button type="button" className="btn btn-primary" onClick={printAll} disabled={busy}>
+                  Сформировать PDF всех актов ({ready.length})
                 </button>
               </div>
             )}
@@ -572,8 +898,9 @@ function GroupTab({
       </div>
 
       <div className="print-only">
-        {lines &&
-          toPrint.map((m) => <InvoiceSheet key={m.id} lines={studentInvoice(lines, m.id)} ym={ym} />)}
+        {ready.map((m) => (
+          <ActSheet key={m.id} a={m.act} />
+        ))}
       </div>
     </div>
   );
@@ -587,52 +914,6 @@ export default function Billing() {
   const [tab, setTab] = useState<Tab>('balance');
   const [ym, setYm] = useState(monthOf(today));
   const [studentId, setStudentId] = useState<string | null>(null);
-  const [version, setVersion] = useState(0);
-
-  const [balances, setBalances] = useState<{ key: string; rows: Balance[] } | null>(null);
-  const [balanceError, setBalanceError] = useState<string | null>(null);
-  const [linesByMonth, setLinesByMonth] = useState<Record<string, InvoiceLine[]>>({});
-  const [linesError, setLinesError] = useState<string | null>(null);
-
-  const balanceKey = `${ym}|${version}`;
-  const needBalances = tab === 'balance' || tab === 'invoice';
-  const needLines = tab === 'invoice' || tab === 'group';
-  const haveLines = linesByMonth[ym] !== undefined;
-
-  useEffect(() => {
-    if (!needBalances || balances?.key === balanceKey) return;
-    let alive = true;
-    supabase.rpc('student_balances', { p_to: monthBounds(ym).to }).then(({ data, error }) => {
-      if (!alive) return;
-      if (error) return setBalanceError(error.message);
-      setBalanceError(null);
-      setBalances({ key: balanceKey, rows: (data ?? []) as Balance[] });
-    });
-    return () => {
-      alive = false;
-    };
-  }, [needBalances, balanceKey, balances?.key, ym]);
-
-  useEffect(() => {
-    if (!needLines || haveLines) return;
-    let alive = true;
-    const { from, to } = monthBounds(ym);
-    supabase.rpc('invoice_lines', { p_from: from, p_to: to, p_group_id: null }).then(({ data, error }) => {
-      if (!alive) return;
-      if (error) return setLinesError(error.message);
-      setLinesError(null);
-      setLinesByMonth((m) => ({ ...m, [ym]: (data ?? []) as InvoiceLine[] }));
-    });
-    return () => {
-      alive = false;
-    };
-  }, [needLines, haveLines, ym]);
-
-  const changed = useCallback(() => setVersion((v) => v + 1), []);
-
-  const balanceRows = balances && balances.key === balanceKey ? balances.rows : null;
-  const myBalance = studentId && balanceRows ? balanceRows.find((b) => b.student_id === studentId) ?? null : null;
-  const lines = linesByMonth[ym] ?? null;
 
   if (dir.loading) return <p className="muted">Загрузка…</p>;
   if (dir.error) return <p className="error">Не удалось загрузить данные: {dir.error}</p>;
@@ -640,8 +921,8 @@ export default function Billing() {
   const TABS: { id: Tab; label: string }[] = [
     { id: 'balance', label: 'Баланс' },
     { id: 'payment', label: 'Оплата' },
-    { id: 'invoice', label: 'Счёт ребёнка' },
-    { id: 'group', label: 'Счета группы' },
+    { id: 'invoice', label: 'Акт ученика' },
+    { id: 'group', label: 'Акты группы' },
   ];
 
   return (
@@ -684,9 +965,6 @@ export default function Billing() {
 
       {tab === 'balance' && (
         <BalanceTab
-          rows={balanceRows}
-          loading={!balanceRows && !balanceError}
-          error={balanceError}
           ym={ym}
           onPay={(id) => {
             setStudentId(id);
@@ -698,19 +976,17 @@ export default function Billing() {
           }}
         />
       )}
-      {tab === 'payment' && <PaymentTab studentId={studentId} onPick={setStudentId} onChanged={changed} />}
-      {tab === 'invoice' && (
-        <InvoiceTab
-          studentId={studentId}
-          onPick={setStudentId}
+      {tab === 'payment' && <PaymentTab studentId={studentId} onPick={setStudentId} />}
+      {tab === 'invoice' && <InvoiceTab studentId={studentId} onPick={setStudentId} ym={ym} />}
+      {tab === 'group' && (
+        <GroupTab
           ym={ym}
-          lines={lines}
-          loading={!lines && !linesError}
-          error={linesError}
-          balance={myBalance}
+          onOpen={(id) => {
+            setStudentId(id);
+            setTab('invoice');
+          }}
         />
       )}
-      {tab === 'group' && <GroupTab ym={ym} lines={lines} loading={!lines && !linesError} error={linesError} />}
     </div>
   );
 }

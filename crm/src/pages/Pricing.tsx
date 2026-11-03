@@ -13,9 +13,12 @@ import type { ScheduleSlot } from '../lib/format';
 import { useDirectory } from '../lib/store';
 import type { DirGroup } from '../lib/store';
 
+type PriceKind = 'regular' | 'single';
+
 interface PriceRow {
   id: string;
   group_id: string;
+  kind: PriceKind;
   price_kopecks: number;
   valid_from: string;
 }
@@ -28,7 +31,21 @@ function sortSlots(slots: ScheduleSlot[]): ScheduleSlot[] {
 
 // ---------- Цена ----------
 
-function PriceBlock({ group, rows, onChanged }: { group: DirGroup; rows: PriceRow[]; onChanged: () => Promise<void> }) {
+function PriceBlock({
+  group,
+  kind,
+  title,
+  hint,
+  rows,
+  onChanged,
+}: {
+  group: DirGroup;
+  kind: PriceKind;
+  title: string;
+  hint: string;
+  rows: PriceRow[];
+  onChanged: () => Promise<void>;
+}) {
   const today = todayMinsk();
   const [editing, setEditing] = useState(false);
   const [amount, setAmount] = useState('');
@@ -73,7 +90,7 @@ function PriceBlock({ group, rows, onChanged }: { group: DirGroup; rows: PriceRo
     setErr(null);
     const { error } = await supabase
       .from('group_prices')
-      .upsert({ group_id: group.id, price_kopecks: kopecks, valid_from: from }, { onConflict: 'group_id,valid_from' });
+      .upsert({ group_id: group.id, kind, price_kopecks: kopecks, valid_from: from }, { onConflict: 'group_id,kind,valid_from' });
     if (error) {
       setBusy(false);
       return setErr(error.message);
@@ -85,7 +102,8 @@ function PriceBlock({ group, rows, onChanged }: { group: DirGroup; rows: PriceRo
 
   return (
     <div className="pricing-section">
-      <h3>Цена занятия</h3>
+      <h3>{title}</h3>
+      <p className="muted small">{hint}</p>
       {current ? (
         <p>
           <strong>{formatMoney(current.price_kopecks)}</strong>
@@ -331,7 +349,7 @@ export default function Pricing() {
   const loadPrices = useCallback(async () => {
     const { data, error: e } = await supabase
       .from('group_prices')
-      .select('id, group_id, price_kopecks, valid_from')
+      .select('id, group_id, kind, price_kopecks, valid_from')
       .order('valid_from', { ascending: false })
       .limit(5000);
     if (e) return setPricesError(e.message);
@@ -359,7 +377,9 @@ export default function Pricing() {
   );
 
   const today = todayMinsk();
-  const hasPrice = (gid: string) => (pricesByGroup.get(gid) ?? []).some((r) => r.valid_from <= today);
+  const regularRows = (gid: string) => (pricesByGroup.get(gid) ?? []).filter((r) => r.kind === 'regular');
+  const singleRows = (gid: string) => (pricesByGroup.get(gid) ?? []).filter((r) => r.kind === 'single');
+  const hasPrice = (gid: string) => regularRows(gid).some((r) => r.valid_from <= today);
 
   const visible = useMemo(() => groups.filter((g) => showArchived || !g.is_archived), [groups, showArchived]);
   const noSchedule = visible.filter((g) => (slotsByGroup.get(g.id) ?? []).length === 0).length;
@@ -415,12 +435,16 @@ export default function Pricing() {
       <div className="pricing-list">
         {rows.map((g) => {
           const gSlots = slotsByGroup.get(g.id) ?? [];
-          const gPrices = pricesByGroup.get(g.id) ?? [];
           const labels = scheduleLabels(sortSlots(gSlots));
-          const current = gPrices.find((r) => r.valid_from <= today) ?? null;
+          const current = regularRows(g.id).find((r) => r.valid_from <= today) ?? null;
+          const currentSingle = singleRows(g.id).find((r) => r.valid_from <= today) ?? null;
           const isOpen = openId === g.id;
           return (
-            <div key={g.id} className={`pricing-item${isOpen ? ' is-open' : ''}${g.is_archived ? ' is-archived' : ''}`}>
+            <div
+              key={g.id}
+              id={`pricing-${g.id}`}
+              className={`pricing-item${isOpen ? ' is-open' : ''}${g.is_archived ? ' is-archived' : ''}`}
+            >
               <button type="button" className="pricing-head" onClick={() => setOpenId(isOpen ? null : g.id)} aria-expanded={isOpen}>
                 <span className="pricing-title">
                   {g.name}
@@ -432,7 +456,11 @@ export default function Pricing() {
                     {labels.length > 0 ? labels.join(' · ') : 'расписание не задано'}
                   </span>
                   <span className={current ? '' : 'warn'}>
-                    {prices === null ? '…' : current ? formatMoney(current.price_kopecks) : 'цена не задана'}
+                    {prices === null
+                      ? '…'
+                      : current
+                        ? `${formatMoney(current.price_kopecks)}${currentSingle ? ` · разовое ${formatMoney(currentSingle.price_kopecks)}` : ''}`
+                        : 'цена не задана'}
                   </span>
                 </span>
               </button>
@@ -441,9 +469,45 @@ export default function Pricing() {
                   {prices === null ? (
                     <span className="skeleton skeleton-line" style={{ width: '40%' }} />
                   ) : (
-                    <PriceBlock group={g} rows={gPrices} onChanged={loadPrices} />
+                    <>
+                      <PriceBlock
+                        group={g}
+                        kind="regular"
+                        title="Регулярное занятие"
+                        hint="Цена занятия в абонементе. По ней считается счёт за месяц."
+                        rows={regularRows(g.id)}
+                        onChanged={loadPrices}
+                      />
+                      <PriceBlock
+                        group={g}
+                        kind="single"
+                        title="Разовое занятие"
+                        hint="Нужна, если «б» (болезнь) оплачивается по разовой цене."
+                        rows={singleRows(g.id)}
+                        onChanged={loadPrices}
+                      />
+                    </>
                   )}
                   <ScheduleBlock group={g} slots={gSlots} locations={locations} />
+                  <div className="pricing-done">
+                    <button
+                      type="button"
+                      className="done-btn"
+                      title="Свернуть"
+                      aria-label="Свернуть"
+                      onClick={() => {
+                        setOpenId(null);
+                        setTimeout(
+                          () => document.getElementById(`pricing-${g.id}`)?.scrollIntoView({ block: 'nearest' }),
+                          0,
+                        );
+                      }}
+                    >
+                      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                        <path d="M5 12.5l4.5 4.5L19 7.5" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                    </button>
+                  </div>
                 </div>
               )}
             </div>

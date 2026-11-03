@@ -16,17 +16,21 @@ export default function Attendance() {
   const todayWd = isoWeekday(today);
 
   const [query, setQuery] = useState('');
-  const [markedToday, setMarkedToday] = useState<Set<string>>(new Set());
+  const [cancelledToday, setCancelledToday] = useState<Set<string>>(new Set());
 
-  // Группы, у которых занятие за сегодня уже отмечено.
+  // Группы, у которых сегодняшнее занятие отмечено как не состоявшееся.
   useEffect(() => {
     let alive = true;
     supabase
       .from('lessons')
-      .select('group_id')
+      .select('group_id, is_cancelled')
       .eq('lesson_date', today)
       .then(({ data }) => {
-        if (alive && data) setMarkedToday(new Set((data as { group_id: string }[]).map((r) => r.group_id)));
+        if (alive && data) {
+          setCancelledToday(
+            new Set((data as { group_id: string; is_cancelled: boolean }[]).filter((r) => r.is_cancelled).map((r) => r.group_id)),
+          );
+        }
       });
     return () => {
       alive = false;
@@ -49,10 +53,10 @@ export default function Attendance() {
         const todaySlot = slots.find((s) => s.weekday === todayWd) ?? null;
         return { g, slots, todaySlot };
       });
-    // Сначала группы, у которых занятие сегодня и оно ещё не отмечено; затем остальные по названию.
-    const rank = (r: (typeof list)[number]) => (r.todaySlot ? (markedToday.has(r.g.id) ? 1 : 0) : 2);
+    // Сначала группы, у которых занятие сегодня; затем остальные по названию.
+    const rank = (r: (typeof list)[number]) => (r.todaySlot ? (cancelledToday.has(r.g.id) ? 1 : 0) : 2);
     return list.sort((a, b) => rank(a) - rank(b) || byName(a.g.name, b.g.name));
-  }, [groups, slotsByGroup, query, todayWd, markedToday]);
+  }, [groups, slotsByGroup, query, todayWd, cancelledToday]);
 
   if (loading) return <p className="muted">Загрузка…</p>;
   if (error) return <p className="error">Не удалось загрузить группы: {error}</p>;
@@ -82,8 +86,8 @@ export default function Attendance() {
               <div className="group-card-title">
                 {g.name}
                 {todaySlot && (
-                  <span className={`badge ${markedToday.has(g.id) ? 'badge-done' : 'badge-today'}`}>
-                    {markedToday.has(g.id) ? 'сегодня отмечено' : `сегодня ${timeHM(todaySlot.start_time)}`}
+                  <span className={`badge ${cancelledToday.has(g.id) ? '' : 'badge-today'}`}>
+                    {cancelledToday.has(g.id) ? 'сегодня не состоялось' : `сегодня ${timeHM(todaySlot.start_time)}`}
                   </span>
                 )}
               </div>

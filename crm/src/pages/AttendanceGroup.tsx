@@ -19,8 +19,10 @@ import {
 import { ageYears, pluralYears, timeHM, todayMinsk } from '../lib/format';
 import { useDirectory } from '../lib/store';
 
+// В базе хранятся только исключения («−», «б», «п»). Кто не указан, у того «+».
 interface LessonData {
   id: string;
+  cancelled: boolean;
   marks: Map<string, Mark>;
 }
 interface MonthData {
@@ -30,6 +32,7 @@ interface MonthData {
 interface LessonRow {
   id: string;
   lesson_date: string;
+  is_cancelled: boolean;
   attendance: { student_id: string; mark: Mark }[];
 }
 
@@ -54,8 +57,6 @@ export default function AttendanceGroup() {
   const [extraDates, setExtraDates] = useState<string[]>([]);
   const [month, setMonth] = useState<MonthData | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [draft, setDraft] = useState<Record<string, Mark>>({});
-  const [dirty, setDirty] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
@@ -82,7 +83,7 @@ export default function AttendanceGroup() {
     const { from, to } = monthBounds(ym);
     const { data, error: e } = await supabase
       .from('lessons')
-      .select('id, lesson_date, attendance(student_id, mark)')
+      .select('id, lesson_date, is_cancelled, attendance(student_id, mark)')
       .eq('group_id', groupId)
       .gte('lesson_date', from)
       .lte('lesson_date', to);
@@ -90,7 +91,11 @@ export default function AttendanceGroup() {
     setLoadError(null);
     const lessons = new Map<string, LessonData>();
     for (const l of (data ?? []) as unknown as LessonRow[]) {
-      lessons.set(l.lesson_date, { id: l.id, marks: new Map(l.attendance.map((a) => [a.student_id, a.mark])) });
+      lessons.set(l.lesson_date, {
+        id: l.id,
+        cancelled: l.is_cancelled,
+        marks: new Map<string, Mark>(l.attendance.filter((a) => a.mark !== 'present').map((a) => [a.student_id, a.mark])),
+      });
     }
     setMonth({ key: `${groupId}|${ym}`, lessons });
   }, [groupId, ym]);
@@ -99,11 +104,11 @@ export default function AttendanceGroup() {
     void load();
   }, [load]);
 
-  // Даты занятий месяца: по расписанию + уже отмеченные + добавленные вручную.
+  // Даты занятий месяца: по расписанию, плюс внеплановые с изменениями и добавленные вручную.
   const dates = useMemo(() => {
     const wds = new Set(slots.map((s) => s.weekday));
     const set = new Set<string>(datesInMonth(ym).filter((d) => wds.has(isoWeekday(d))));
-    for (const [d, l] of lessonsMap) if (l.marks.size > 0) set.add(d);
+    for (const [d, l] of lessonsMap) if (l.marks.size > 0 || l.cancelled) set.add(d);
     for (const d of extraDates) if (monthOf(d) === ym) set.add(d);
     return [...set].sort();
   }, [slots, ym, lessonsMap, extraDates]);
@@ -134,9 +139,15 @@ export default function AttendanceGroup() {
     setSelected(pick);
   }, [monthReady, dates, selected, ym, today]);
 
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 2000);
+    return () => clearTimeout(t);
+  }, [flash]);
+
   const nameOf = useCallback((id: string) => dir.studentById.get(id)?.full_name ?? 'Ученик', [dir.studentById]);
 
-  // Список учеников на дату: те, кто состоит в группе в этот день, и те, у кого уже есть отметка.
+  // Ученики на дату: кто состоит в группе в этот день, и те, у кого уже есть исключение.
   const rosterFor = useCallback(
     (d: string) => {
       const saved = lessonsMap.get(d);
@@ -156,95 +167,28 @@ export default function AttendanceGroup() {
     [enrs, lessonsMap, nameOf],
   );
 
-  // Черновик занятия: сохранённые отметки, остальным по умолчанию «+».
-  useEffect(() => {
-    if (!selected || !monthReady) return;
-    const saved = lessonsMap.get(selected);
-    const next: Record<string, Mark> = {};
-    for (const r of rosterFor(selected)) next[r.id] = saved?.marks.get(r.id) ?? 'present';
-    setDraft(next);
-    setDirty(false);
-  }, [selected, lessonsMap, monthReady, rosterFor]);
-
-  useEffect(() => {
-    if (!flash) return;
-    const t = setTimeout(() => setFlash(null), 2500);
-    return () => clearTimeout(t);
-  }, [flash]);
-
-  const leaveOk = () => !dirty || window.confirm('Несохранённые отметки будут потеряны. Продолжить?');
+  const markOf = (d: string, sid: string): Mark => lessonsMap.get(d)?.marks.get(sid) ?? 'present';
 
   const changeMonth = (delta: number) => {
-    if (!leaveOk()) return;
     setSelected(null);
     setYm(shiftMonth(ym, delta));
   };
   const goToday = () => {
-    if (!leaveOk()) return;
     setSelected(null);
     setYm(monthOf(today));
   };
-  const selectDate = (d: string) => {
-    if (d === selected || !leaveOk()) return;
-    setSelected(d);
-  };
 
-  const saveLesson = async () => {
-    if (!selected) return;
-    const marks = rosterFor(selected)
-      .filter((r) => r.enrolled)
-      .map((r) => ({ student_id: r.id, mark: draft[r.id] ?? 'present' }));
-    setBusy(true);
-    setError(null);
-    const { error: e } = await supabase.rpc('save_attendance', { p_group_id: groupId, p_date: selected, p_marks: marks });
-    if (e) {
-      setBusy(false);
-      return setError(friendlyError(e));
-    }
-    await load();
-    setBusy(false);
-    setFlash('Сохранено');
-  };
-
-  const cancelLesson = async () => {
-    if (!selected) return;
-    if (!window.confirm(`Снять все отметки за ${formatLong(selected)}? Занятие не будет учтено в счёте.`)) return;
-    setBusy(true);
-    setError(null);
-    const { error: e } = await supabase.rpc('cancel_lesson', { p_group_id: groupId, p_date: selected });
-    if (e) {
-      setBusy(false);
-      return setError(friendlyError(e));
-    }
-    setExtraDates((list) => list.filter((d) => d !== selected));
-    await load();
-    setBusy(false);
-    setFlash('Отметки сняты');
-  };
-
-  const addDate = () => {
-    if (!newDate) return;
-    if (!canEdit(newDate)) {
-      return setError('Эту дату учитель добавить не может: доступны сегодня и 3 предыдущих дня.');
-    }
-    if (!leaveOk()) return;
-    setError(null);
-    setExtraDates((list) => (list.includes(newDate) ? list : [...list, newDate]));
-    setYm(monthOf(newDate));
-    setSelected(newDate);
-    setAddingDate(false);
-  };
-
-  // Одна отметка в журнале за месяц: сразу в интерфейсе, затем в базу.
-  const setCell = async (d: string, studentId: string, mark: Mark) => {
+  // Одна отметка: сразу на экране, затем в базе. «+» в базе не хранится: он снимает исключение.
+  const setMark = async (d: string, studentId: string, mark: Mark) => {
     setError(null);
     setMonth((m: MonthData | null) => {
       if (!m) return m;
       const lessons = new Map<string, LessonData>(m.lessons);
       const cur = lessons.get(d);
       const marks = new Map<string, Mark>(cur?.marks ?? []);
-      marks.set(studentId, mark);
-      lessons.set(d, { id: cur?.id ?? '', marks });
+      if (mark === 'present') marks.delete(studentId);
+      else marks.set(studentId, mark);
+      lessons.set(d, { id: cur?.id ?? '', cancelled: cur?.cancelled ?? false, marks });
       return { ...m, lessons };
     });
     const { error: e } = await supabase.rpc('save_attendance', {
@@ -253,21 +197,41 @@ export default function AttendanceGroup() {
       p_marks: [{ student_id: studentId, mark }],
     });
     if (e) setError(friendlyError(e));
+    else setFlash('Сохранено');
     await load();
   };
 
-  const markAllPresent = async (d: string) => {
-    const saved = lessonsMap.get(d);
-    const marks = rosterFor(d)
-      .filter((r) => r.enrolled && !saved?.marks.has(r.id))
-      .map((r) => ({ student_id: r.id, mark: 'present' as Mark }));
-    if (marks.length === 0) return;
+  const cancelLesson = async (d: string) => {
+    if (!window.confirm(`Занятие ${formatLong(d)} не состоялось? Оно не будет учтено в счёте, отметки за этот день снимутся.`)) return;
     setBusy(true);
     setError(null);
-    const { error: e } = await supabase.rpc('save_attendance', { p_group_id: groupId, p_date: d, p_marks: marks });
+    const { error: e } = await supabase.rpc('cancel_lesson', { p_group_id: groupId, p_date: d });
     if (e) setError(friendlyError(e));
+    else setFlash('Занятие отмечено как не состоявшееся');
     await load();
     setBusy(false);
+  };
+
+  const restoreLesson = async (d: string) => {
+    setBusy(true);
+    setError(null);
+    const { error: e } = await supabase.rpc('restore_lesson', { p_group_id: groupId, p_date: d });
+    if (e) setError(friendlyError(e));
+    else setFlash('Занятие возвращено');
+    await load();
+    setBusy(false);
+  };
+
+  const addDate = () => {
+    if (!newDate) return;
+    if (!canEdit(newDate)) {
+      return setError('Эту дату учитель добавить не может: доступны сегодня и 3 предыдущих дня.');
+    }
+    setError(null);
+    setExtraDates((list) => (list.includes(newDate) ? list : [...list, newDate]));
+    setYm(monthOf(newDate));
+    setSelected(newDate);
+    setAddingDate(false);
   };
 
   if (dir.error) return <p className="error">Не удалось загрузить данные: {dir.error}</p>;
@@ -285,12 +249,12 @@ export default function AttendanceGroup() {
     );
   }
 
-  const savedLesson = selected ? lessonsMap.get(selected) : undefined;
-  const lessonIsSaved = !!savedLesson && savedLesson.marks.size > 0;
+  const selLesson = selected ? lessonsMap.get(selected) : undefined;
+  const cancelled = !!selLesson?.cancelled;
   const editable = selected ? canEdit(selected) : false;
   const roster = selected && monthReady ? rosterFor(selected) : [];
   const counts = { present: 0, absent: 0, sick: 0, trial: 0 };
-  for (const r of roster) counts[draft[r.id] ?? 'present'] += 1;
+  if (selected) for (const r of roster) counts[markOf(selected, r.id)] += 1;
 
   // Таблица за месяц
   const monthStudentIds = (() => {
@@ -298,7 +262,9 @@ export default function AttendanceGroup() {
     for (const d of dates) for (const r of rosterFor(d)) ids.add(r.id);
     return [...ids].sort((a, b) => nameOf(a).localeCompare(nameOf(b), 'ru'));
   })();
-  const enrolledSets = new Map<string, Set<string>>(dates.map((d) => [d, new Set(rosterFor(d).filter((r) => r.enrolled).map((r) => r.id))]));
+  const enrolledSets = new Map<string, Set<string>>(
+    dates.map((d) => [d, new Set(rosterFor(d).filter((r) => r.enrolled).map((r) => r.id))]),
+  );
 
   return (
     <div className="att-page">
@@ -341,9 +307,7 @@ export default function AttendanceGroup() {
           role="tab"
           aria-selected={tab === 'month'}
           className={`tab${tab === 'month' ? ' is-active' : ''}`}
-          onClick={() => {
-            if (leaveOk()) setTab('month');
-          }}
+          onClick={() => setTab('month')}
         >
           Месяц
         </button>
@@ -351,6 +315,7 @@ export default function AttendanceGroup() {
 
       {loadError && <p className="error">Не удалось загрузить отметки: {loadError}</p>}
       {error && <p className="error">{error}</p>}
+      {flash && <p className="att-flash">{flash}</p>}
 
       {!monthReady && !loadError && (
         <div>
@@ -381,14 +346,14 @@ export default function AttendanceGroup() {
             <div className="date-chips">
               {dates.map((d) => {
                 const l = lessonsMap.get(d);
-                const marked = !!l && l.marks.size > 0;
+                const changed = !!l && l.marks.size > 0;
                 return (
                   <button
                     type="button"
                     key={d}
-                    className={`date-chip${d === selected ? ' is-selected' : ''}${d === today ? ' is-today' : ''}${marked ? ' is-marked' : ''}`}
-                    onClick={() => selectDate(d)}
-                    title={`${formatLong(d)}${isExtra(d) ? ' (вне расписания)' : ''}`}
+                    className={`date-chip${d === selected ? ' is-selected' : ''}${d === today ? ' is-today' : ''}${changed ? ' is-changed' : ''}${l?.cancelled ? ' is-cancelled' : ''}`}
+                    onClick={() => setSelected(d)}
+                    title={`${formatLong(d)}${isExtra(d) ? ' (вне расписания)' : ''}${l?.cancelled ? ': не состоялось' : ''}`}
                   >
                     <span className="date-chip-wd">{weekdayShort(d)}</span>
                     <span className="date-chip-day">{dayNum(d)}</span>
@@ -431,8 +396,8 @@ export default function AttendanceGroup() {
                   {timeFor(selected) && <span className="muted"> · {timeFor(selected)}</span>}
                   {isExtra(selected) && <span className="badge badge-extra">вне расписания</span>}
                 </h2>
-                <span className={`att-status ${lessonIsSaved ? 'is-saved' : ''}`}>
-                  {lessonIsSaved ? 'Отмечено' : 'Ещё не отмечено'}
+                <span className={`att-status ${cancelled ? 'is-cancelled' : ''}`}>
+                  {cancelled ? 'Не состоялось' : (selLesson?.marks.size ?? 0) > 0 ? `Исключений: ${selLesson?.marks.size}` : 'Все «+»'}
                 </span>
               </div>
 
@@ -443,74 +408,76 @@ export default function AttendanceGroup() {
                     : 'Править прошлые даты может только администратор. Отметки показаны для просмотра.'}
                 </p>
               )}
-              {editable && !lessonIsSaved && (
-                <p className="muted small">
-                  Всем стоит «+» по умолчанию, но пока вы не нажмёте «Сохранить», в базу ничего не записано. Измените
-                  отсутствующих.
-                </p>
-              )}
 
-              {roster.length === 0 && <p className="muted">На эту дату в группе нет учеников.</p>}
-
-              <div className="att-list">
-                {roster.map((r) => {
-                  const st = dir.studentById.get(r.id);
-                  const age = st ? ageYears(st.birth_date) : null;
-                  const current = draft[r.id] ?? 'present';
-                  const can = editable && r.enrolled;
-                  return (
-                    <div key={r.id} className="att-row">
-                      <div className="att-name">
-                        {st?.full_name ?? 'Ученик'}
-                        {age !== null && <span className="muted"> · {pluralYears(age)}</span>}
-                        {!r.enrolled && <span className="muted small"> · не состоял в группе в этот день</span>}
-                      </div>
-                      <div className="mark-btns" role="group" aria-label="Отметка">
-                        {MARKS.map((m) => (
-                          <button
-                            type="button"
-                            key={m.value}
-                            className={`mark-btn mark-${m.value}${current === m.value ? ' is-on' : ''}`}
-                            disabled={!can || busy}
-                            title={m.label}
-                            aria-pressed={current === m.value}
-                            onClick={() => {
-                              setDraft((dr) => ({ ...dr, [r.id]: m.value }));
-                              setDirty(true);
-                            }}
-                          >
-                            {m.symbol}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {roster.length > 0 && (
-                <p className="muted small att-counts">
-                  Были: {counts.present} · не были: {counts.absent} · болеют: {counts.sick} · пробное: {counts.trial}
-                </p>
-              )}
-
-              {editable && roster.some((r) => r.enrolled) && (
-                <div className="field-actions att-actions">
-                  <button
-                    type="button"
-                    className="btn btn-primary"
-                    onClick={saveLesson}
-                    disabled={busy || (lessonIsSaved && !dirty)}
-                  >
-                    {busy ? 'Сохраняем…' : lessonIsSaved && !dirty ? 'Сохранено' : 'Сохранить'}
-                  </button>
-                  {lessonIsSaved && (
-                    <button type="button" className="btn btn-danger" onClick={cancelLesson} disabled={busy}>
-                      Занятие не состоялось
+              {cancelled ? (
+                <div>
+                  <p className="att-notice">Занятие не состоялось. Оно не оплачивается и не входит в счёт.</p>
+                  {editable && (
+                    <button type="button" className="btn btn-sm" onClick={() => restoreLesson(selected)} disabled={busy}>
+                      Вернуть занятие
                     </button>
                   )}
-                  {flash && <span className="att-flash">{flash}</span>}
                 </div>
+              ) : (
+                <>
+                  {editable && (
+                    <p className="muted small">
+                      Всем стоит «+». Изменяйте только отсутствующих: каждое изменение сохраняется сразу.
+                      {isExtra(selected) && ' Внеплановое занятие в счёт не входит.'}
+                    </p>
+                  )}
+
+                  {roster.length === 0 && <p className="muted">На эту дату в группе нет учеников.</p>}
+
+                  <div className="att-list">
+                    {roster.map((r) => {
+                      const st = dir.studentById.get(r.id);
+                      const age = st ? ageYears(st.birth_date) : null;
+                      const current = markOf(selected, r.id);
+                      const can = editable && r.enrolled;
+                      return (
+                        <div key={r.id} className="att-row">
+                          <div className="att-name">
+                            {st?.full_name ?? 'Ученик'}
+                            {age !== null && <span className="muted"> · {pluralYears(age)}</span>}
+                            {!r.enrolled && <span className="muted small"> · не состоял в группе в этот день</span>}
+                          </div>
+                          <div className="mark-btns" role="group" aria-label="Отметка">
+                            {MARKS.map((m) => (
+                              <button
+                                type="button"
+                                key={m.value}
+                                className={`mark-btn mark-${m.value}${current === m.value ? ' is-on' : ''}`}
+                                disabled={!can}
+                                title={m.label}
+                                aria-pressed={current === m.value}
+                                onClick={() => {
+                                  if (current !== m.value) void setMark(selected, r.id, m.value);
+                                }}
+                              >
+                                {m.symbol}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+
+                  {roster.length > 0 && (
+                    <p className="muted small att-counts">
+                      Были: {counts.present} · не были: {counts.absent} · болеют: {counts.sick} · пробное: {counts.trial}
+                    </p>
+                  )}
+
+                  {editable && (
+                    <div className="field-actions att-actions">
+                      <button type="button" className="btn btn-danger btn-sm" onClick={() => cancelLesson(selected)} disabled={busy}>
+                        Занятие не состоялось
+                      </button>
+                    </div>
+                  )}
+                </>
               )}
             </section>
           )}
@@ -520,76 +487,68 @@ export default function AttendanceGroup() {
       {monthReady && tab === 'month' && dates.length > 0 && (
         <>
           <p className="muted small">
-            Нажмите на ячейку, чтобы выбрать отметку, она сохранится сразу. Пустая ячейка не оплачивается. Нажмите на дату,
-            чтобы открыть занятие целиком.
+            Всем стоит «+». Нажмите на ячейку, чтобы выбрать другую отметку: она сохранится сразу. Нажмите на дату, чтобы
+            открыть занятие целиком.
           </p>
           <div className="att-grid-wrap">
             <table className="att-grid">
               <thead>
                 <tr>
                   <th className="att-sticky">Ученик</th>
-                  {dates.map((d) => {
-                    const saved = lessonsMap.get(d);
-                    const needAll =
-                      canEdit(d) && rosterFor(d).some((r) => r.enrolled && !saved?.marks.has(r.id));
-                    return (
-                      <th key={d} className={d === today ? 'is-today' : ''}>
-                        <button
-                          type="button"
-                          className="att-date-btn"
-                          onClick={() => {
-                            setSelected(d);
-                            setTab('lesson');
-                          }}
-                          title={isExtra(d) ? 'Вне расписания' : formatLong(d)}
-                        >
-                          <span>{weekdayShort(d)}</span>
-                          <strong>{dayNum(d)}</strong>
-                        </button>
-                        {needAll && (
-                          <button type="button" className="att-all" onClick={() => markAllPresent(d)} disabled={busy} title="Поставить «+» всем без отметки">
-                            все +
-                          </button>
-                        )}
-                      </th>
-                    );
-                  })}
-                  <th className="att-total">Оплач.</th>
+                  {dates.map((d) => (
+                    <th key={d} className={d === today ? 'is-today' : ''}>
+                      <button
+                        type="button"
+                        className="att-date-btn"
+                        onClick={() => {
+                          setSelected(d);
+                          setTab('lesson');
+                        }}
+                        title={isExtra(d) ? 'Вне расписания' : formatLong(d)}
+                      >
+                        <span>{weekdayShort(d)}</span>
+                        <strong>{dayNum(d)}</strong>
+                      </button>
+                      {lessonsMap.get(d)?.cancelled && <span className="att-cancel-tag">отмена</span>}
+                    </th>
+                  ))}
+                  <th className="att-total">«+»</th>
                 </tr>
               </thead>
               <tbody>
                 {monthStudentIds.map((sid) => {
-                  let paid = 0;
+                  let pluses = 0;
                   return (
                     <tr key={sid}>
                       <td className="att-sticky att-student">{nameOf(sid)}</td>
                       {dates.map((d) => {
-                        const mark = lessonsMap.get(d)?.marks.get(sid);
-                        if (mark === 'present') paid += 1;
+                        const isCancelled = !!lessonsMap.get(d)?.cancelled;
                         const enrolled = enrolledSets.get(d)?.has(sid) ?? false;
-                        const can = canEdit(d) && enrolled;
+                        const mark = markOf(d, sid);
+                        if (!isCancelled && enrolled && mark === 'present') pluses += 1;
+                        const can = canEdit(d) && enrolled && !isCancelled;
+                        if (isCancelled || !enrolled) {
+                          return (
+                            <td key={d} className={d === today ? 'is-today' : ''}>
+                              <span className="cell-empty">{isCancelled ? '✕' : '–'}</span>
+                            </td>
+                          );
+                        }
                         if (!can) {
                           return (
                             <td key={d} className={d === today ? 'is-today' : ''}>
-                              {mark ? (
-                                <span className={`cell-mark mark-${mark}`}>{SYMBOL[mark]}</span>
-                              ) : (
-                                <span className="cell-empty">{enrolled ? '' : '–'}</span>
-                              )}
+                              <span className={`cell-mark mark-${mark}`}>{SYMBOL[mark]}</span>
                             </td>
                           );
                         }
                         return (
                           <td key={d} className={d === today ? 'is-today' : ''}>
                             <select
-                              className={`cell-select${mark ? ` mark-${mark}` : ''}`}
-                              value={mark ?? ''}
+                              className={`cell-select mark-${mark}`}
+                              value={mark}
                               aria-label={`${nameOf(sid)}, ${formatLong(d)}`}
-                              onChange={(e) => void setCell(d, sid, e.target.value as Mark)}
+                              onChange={(e) => void setMark(d, sid, e.target.value as Mark)}
                             >
-                              <option value="" disabled={!!mark}>
-                                ·
-                              </option>
                               {MARKS.map((m) => (
                                 <option key={m.value} value={m.value}>
                                   {m.symbol}
@@ -599,7 +558,7 @@ export default function AttendanceGroup() {
                           </td>
                         );
                       })}
-                      <td className="att-total">{paid}</td>
+                      <td className="att-total">{pluses}</td>
                     </tr>
                   );
                 })}
