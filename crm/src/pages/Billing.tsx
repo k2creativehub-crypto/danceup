@@ -135,9 +135,7 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
 function blockers(rows: InvoiceRow[]): string[] {
   const out: string[] = [];
   const noPrice = rows.reduce((s, r) => s + r.lessons_without_price, 0);
-  const pending = rows.reduce((s, r) => s + r.sick_pending, 0);
   if (noPrice > 0) out.push(`у ${noPrice} занятий не задана цена`);
-  if (pending > 0) out.push(`нужно выбрать цену для «б»: ${pending}`);
   return out;
 }
 
@@ -629,6 +627,20 @@ function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPic
     setReload((v) => v + 1);
   };
 
+  const chooseAllRegular = async () => {
+    const todo = choosable.filter((d) => (d.kind ?? 'single') === 'single');
+    if (todo.length === 0) return;
+    setBusy(true);
+    setError(null);
+    const { error: e } = await supabase.from('sick_pricing').upsert(
+      todo.map((d) => ({ group_id: d.group_id, student_id: studentId, lesson_date: d.lesson_date, kind: 'regular' })),
+      { onConflict: 'group_id,student_id,lesson_date' },
+    );
+    setBusy(false);
+    if (e) return setError(e.message);
+    setReload((v) => v + 1);
+  };
+
   const print = async () => {
     if (!act) return;
     setBusy(true);
@@ -683,37 +695,53 @@ function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPic
 
       {!viewing && choosable.length > 0 && (
         <div className="panel no-print">
-          <h3>Как считать «б» (болезнь)?</h3>
+          <h3>«б» (болезнь): пересчёт по тарифу разового занятия</h3>
           <p className="muted small">
-            За месяц «б» не больше 4. Для каждого занятия выберите цену: разовую или регулярную. Если «б» больше 4, они не
-            оплачиваются и переносятся на следующий месяц, выбор не нужен.
+            За месяц «б» не больше 4, поэтому они пересчитаны по цене разового занятия. Если нужно, пересчитайте нужную дату
+            в регулярное. Если «б» больше 4, они не оплачиваются и переносятся на следующий месяц.
           </p>
+          {choosable.filter((d) => (d.kind ?? 'single') === 'single').length > 1 && (
+            <div className="field-actions" style={{ marginBottom: 8 }}>
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={chooseAllRegular}>
+                Пересчитать все в регулярное
+              </button>
+            </div>
+          )}
           {choosable.map((d) => {
             const r = priceFor(d);
+            const kind = d.kind ?? 'single';
+            const noSingle = r?.single_price_kopecks == null;
             return (
               <div key={`${d.group_id}-${d.lesson_date}`} className="sick-row">
                 <div>
                   {formatDate(d.lesson_date)}
                   <span className="muted small"> · {d.group_name}</span>
+                  <div className="small">
+                    {kind === 'regular' ? (
+                      <>пересчитано по регулярному тарифу{r?.price_kopecks != null ? ` · ${formatMoney(r.price_kopecks)}` : ''}</>
+                    ) : noSingle ? (
+                      <span className="error">разовая цена группы не задана, «б» считается по регулярной</span>
+                    ) : (
+                      <>пересчёт «б» по тарифу разового занятия · {formatMoney(r?.single_price_kopecks ?? 0)}</>
+                    )}
+                  </div>
                 </div>
                 <div className="sick-choice">
-                  <button
-                    type="button"
-                    className={`btn btn-sm${d.kind === 'single' ? ' btn-primary' : ''}`}
-                    disabled={busy || r?.single_price_kopecks == null}
-                    onClick={() => choose(d, 'single')}
-                    title={r?.single_price_kopecks == null ? 'У группы не задана разовая цена' : ''}
-                  >
-                    Разовое{r?.single_price_kopecks != null ? ` · ${formatMoney(r.single_price_kopecks)}` : ''}
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-sm${d.kind === 'regular' ? ' btn-primary' : ''}`}
-                    disabled={busy}
-                    onClick={() => choose(d, 'regular')}
-                  >
-                    Регулярное{r?.price_kopecks != null ? ` · ${formatMoney(r.price_kopecks)}` : ''}
-                  </button>
+                  {kind === 'single' ? (
+                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => choose(d, 'regular')}>
+                      Пересчитать в регулярное
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={busy || noSingle}
+                      onClick={() => choose(d, 'single')}
+                      title={noSingle ? 'У группы не задана разовая цена' : ''}
+                    >
+                      Вернуть по разовому
+                    </button>
+                  )}
                 </div>
               </div>
             );
@@ -877,7 +905,10 @@ function GroupTab({ ym, onOpen }: { ym: string; onOpen: (id: string) => void }) 
                     ) : (
                       <span className="muted small">готов к печати</span>
                     )}
-                    {m.stop.length > 0 && (
+                    {m.all.some((r) => r.sick_count > 0 && r.sick_count <= 4) && (
+                      <span className="muted small">есть «б»: пересчитаны по разовому тарифу</span>
+                    )}
+                    {(m.stop.length > 0 || m.all.some((r) => r.sick_count > 0 && r.sick_count <= 4)) && (
                       <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => onOpen(m.id)}>
                         Открыть
                       </button>
