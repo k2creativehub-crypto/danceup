@@ -65,3 +65,13 @@ export function formatLong(ymd: string): string {
   const m = Number(ymd.slice(5, 7));
   return `${weekdayShort(ymd)}, ${dayNum(ymd)} ${MONTHS_GEN[m - 1]}`;
 }
+
+// «31 октября 2026 г.»
+export function formatDateGen(ymd: string): string {
+  const m = Number(ymd.slice(5, 7));
+  return `${dayNum(ymd)} ${MONTHS_GEN[m - 1]} ${ymd.slice(0, 4)} г.`;
+}
+
+export function lastDayOfMonth(ym: string): string {
+  return monthBounds(ym).to;
+}

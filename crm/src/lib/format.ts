@@ -91,3 +91,18 @@ export function parseMoney(input: string): number | null {
   if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
   return Math.round(Number(t) * 100);
 }
+
+// 91 -> «91,00 руб.»
+export function rub(kopecks: number): string {
+  const v = (kopecks / 100).toLocaleString('ru-RU', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `${v} руб.`;
+}
+
+export function pluralLessons(n: number): string {
+  const n100 = n % 100;
+  const n10 = n % 10;
+  if (n100 >= 11 && n100 <= 14) return `${n} занятий`;
+  if (n10 === 1) return `${n} занятие`;
+  if (n10 >= 2 && n10 <= 4) return `${n} занятия`;
+  return `${n} занятий`;
+}
