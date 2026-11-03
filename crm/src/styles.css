@@ -594,3 +594,43 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
   .invoice-sheet { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; break-after: page; page-break-after: always; }
   .invoice-sheet:last-child { break-after: auto; page-break-after: auto; }
 }
+
+/* Посещаемость: исключения и отменённые занятия */
+.date-chip.is-changed .date-chip-dot { background: #d4a017; }
+.date-chip.is-cancelled { opacity: 0.55; text-decoration: line-through; }
+.att-status.is-cancelled { color: var(--danger); }
+.att-cancel-tag { display: block; font-size: 11px; color: var(--danger); }
+
+/* Акт приёмки оказанных услуг */
+.act-sheet {
+  max-width: 760px;
+  margin: 0 0 20px;
+  padding: 28px 36px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #fff;
+  color: #000;
+  font-family: 'Times New Roman', Times, serif;
+  font-size: 15px;
+  line-height: 1.45;
+}
+.act-title { text-align: center; font-weight: 700; font-size: 18px; }
+.act-subtitle { text-align: center; margin-bottom: 12px; }
+.act-place { display: flex; justify-content: space-between; margin-bottom: 12px; }
+.act-p { text-align: justify; margin: 0 0 10px; }
+.act-list { margin: 0 0 16px; padding-left: 22px; text-align: justify; }
+.act-list li { margin-bottom: 6px; }
+.act-executor { margin-top: 12px; font-size: 14px; line-height: 1.35; }
+.act-executor-title { font-weight: 700; margin-bottom: 4px; }
+.act-sign { margin-top: 22px; }
+
+.start-panel { margin-bottom: 16px; }
+.start-row { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.start-row .field { margin: 0; }
+.sick-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 8px 0; border-top: 1px solid var(--line); }
+.sick-choice { display: flex; gap: 8px; flex-wrap: wrap; }
+
+@media print {
+  .act-sheet { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; break-after: page; page-break-after: always; }
+  .act-sheet:last-child { break-after: auto; page-break-after: auto; }
+}
