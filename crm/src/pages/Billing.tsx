@@ -135,9 +135,7 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
 function blockers(rows: InvoiceRow[]): string[] {
   const out: string[] = [];
   const noPrice = rows.reduce((s, r) => s + r.lessons_without_price, 0);
-  const pending = rows.reduce((s, r) => s + r.sick_pending, 0);
   if (noPrice > 0) out.push(`у ${noPrice} занятий не задана цена`);
-  if (pending > 0) out.push(`нужно выбрать цену для «б»: ${pending}`);
   return out;
 }
 
@@ -229,7 +227,7 @@ function ActSheet({ a }: { a: ActData }) {
 
 // ---------- Вкладка «Баланс» ----------
 
-function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) => void; onInvoice: (id: string) => void }) {
+function BalanceTab({ ym, onPay }: { ym: string; onPay: (id: string) => void }) {
   const dir = useDirectory();
   const [rows, setRows] = useState<Balance[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -240,6 +238,26 @@ function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) 
   const [query, setQuery] = useState('');
   const [groupId, setGroupId] = useState('');
   const [debtOnly, setDebtOnly] = useState(false);
+  const [openId, setOpenId] = useState<string | null>(null);
+  const [archived, setArchived] = useState<Map<string, number>>(new Map());
+
+  // Ученики, у которых за выбранный месяц уже сформирован акт, и его сумма
+  useEffect(() => {
+    let alive = true;
+    supabase
+      .from('invoice_archive')
+      .select('student_id, total_kopecks')
+      .eq('month', firstDay(ym))
+      .then(({ data }) => {
+        if (!alive || !data) return;
+        setArchived(
+          new Map<string, number>((data as { student_id: string; total_kopecks: number }[]).map((r) => [r.student_id, r.total_kopecks])),
+        );
+      });
+    return () => {
+      alive = false;
+    };
+  }, [ym, reload]);
 
   useEffect(() => {
     let alive = true;
@@ -322,7 +340,7 @@ function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) 
 
   return (
     <div>
-      <div className="panel start-panel">
+      <div className="panel start-panel no-print">
         <div className="start-row">
           <label className="field">
             <span>Начисления ведутся с месяца</span>
@@ -339,7 +357,7 @@ function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) 
         {settingsErr && <p className="error">{settingsErr}</p>}
       </div>
 
-      <div className="filters filters-balance">
+      <div className="filters filters-balance no-print">
         <input
           className="search"
           type="search"
@@ -361,9 +379,9 @@ function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) 
         </label>
       </div>
 
-      {error && <p className="error">Не удалось загрузить баланс: {error}</p>}
+      {error && <p className="error no-print">Не удалось загрузить баланс: {error}</p>}
       {!rows && !error && (
-        <div>
+        <div className="no-print">
           <span className="skeleton skeleton-line" />
           <span className="skeleton skeleton-line" />
           <span className="skeleton skeleton-line" />
@@ -372,43 +390,59 @@ function BalanceTab({ ym, onPay, onInvoice }: { ym: string; onPay: (id: string) 
 
       {rows && (
         <>
-          <p className="muted count">
+          <p className="muted count no-print">
             На конец периода «{formatMonth(ym).toLowerCase()}». Учеников: {list.length} · общий долг:{' '}
             <strong>{formatMoney(totalDebt)}</strong>
             {totalOver > 0 && <> · переплаты: {formatMoney(totalOver)}</>}
           </p>
-          {list.length === 0 && <p className="muted">Никого не найдено.</p>}
+          {list.length === 0 && <p className="muted no-print">Никого не найдено.</p>}
           <div className="bal-list">
             {list.map(({ b, st, enrs }) => (
-              <div key={b.student_id} className="bal-row">
-                <div className="bal-name">
-                  <strong>{st?.full_name}</strong>
-                  <div className="muted small">
-                    {enrs
-                      .map((e) => dir.groupById.get(e.group_id)?.name)
-                      .filter(Boolean)
-                      .join(', ') || 'нет групп'}
+              <div key={b.student_id} className="bal-item">
+                <div className="bal-row no-print">
+                  <div className="bal-name">
+                    <strong>{st?.full_name}</strong>
+                    <div className="muted small">
+                      {enrs
+                        .map((e) => dir.groupById.get(e.group_id)?.name)
+                        .filter(Boolean)
+                        .join(', ') || 'нет групп'}
+                    </div>
+                    {archived.has(b.student_id) && (
+                      <div className="small bal-archived">
+                        акт за месяц сформирован · {formatMoney(archived.get(b.student_id) ?? 0)}
+                      </div>
+                    )}
+                  </div>
+                  <div className="bal-num">
+                    <span className="muted small">начислено</span>
+                    <span>{formatMoney(b.charged_kopecks)}</span>
+                  </div>
+                  <div className="bal-num">
+                    <span className="muted small">оплачено</span>
+                    <span>{formatMoney(b.paid_kopecks)}</span>
+                  </div>
+                  <div className="bal-num bal-debt">
+                    <Debt kopecks={b.debt_kopecks} />
+                  </div>
+                  <div className="bal-actions">
+                    <button
+                      type="button"
+                      className={`btn btn-sm${openId === b.student_id ? ' btn-primary' : ''}`}
+                      onClick={() => setOpenId(openId === b.student_id ? null : b.student_id)}
+                    >
+                      {openId === b.student_id ? 'Свернуть' : 'Подробнее'}
+                    </button>
+                    <button type="button" className="btn btn-sm" onClick={() => onPay(b.student_id)}>
+                      Оплата
+                    </button>
                   </div>
                 </div>
-                <div className="bal-num">
-                  <span className="muted small">начислено</span>
-                  <span>{formatMoney(b.charged_kopecks)}</span>
-                </div>
-                <div className="bal-num">
-                  <span className="muted small">оплачено</span>
-                  <span>{formatMoney(b.paid_kopecks)}</span>
-                </div>
-                <div className="bal-num bal-debt">
-                  <Debt kopecks={b.debt_kopecks} />
-                </div>
-                <div className="bal-actions">
-                  <button type="button" className="btn btn-sm" onClick={() => onPay(b.student_id)}>
-                    Оплата
-                  </button>
-                  <button type="button" className="btn btn-sm" onClick={() => onInvoice(b.student_id)}>
-                    Акт
-                  </button>
-                </div>
+                {openId === b.student_id && (
+                  <div className="bal-detail">
+                    <StudentMonthCard key={`${b.student_id}|${ym}`} studentId={b.student_id} ym={ym} onChanged={() => setReload((v) => v + 1)} />
+                  </div>
+                )}
               </div>
             ))}
           </div>
@@ -551,24 +585,22 @@ function PaymentTab({ studentId, onPick }: { studentId: string | null; onPick: (
   );
 }
 
-// ---------- Вкладка «Акт ученика» ----------
+// ---------- Карточка ученика за месяц: выписка, «б», акт ----------
 
-function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPick: (id: string | null) => void; ym: string }) {
-  const dir = useDirectory();
-  const [rows, setRows] = useState<InvoiceRow[] | null>(null);
-  const [sick, setSick] = useState<SickDate[]>([]);
-  const [debt, setDebt] = useState<Balance | null>(null);
-  const [archive, setArchive] = useState<ArchiveRow[]>([]);
-  const [viewing, setViewing] = useState<ActData | null>(null);
+interface StudentMonthData {
+  rows: InvoiceRow[];
+  sick: SickDate[];
+  debt: Balance | null;
+  archive: ArchiveRow[];
+}
+
+function useStudentMonth(studentId: string, ym: string) {
+  const [data, setData] = useState<StudentMonthData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
-    if (!studentId) return;
     let alive = true;
-    setRows(null);
-    setViewing(null);
     (async () => {
       const [inv, sd, ba, ar] = await Promise.all([
         supabase.rpc('month_invoices', { p_month: firstDay(ym), p_group_id: null, p_student_id: studentId }),
@@ -584,15 +616,392 @@ function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPic
       const firstError = inv.error ?? sd.error ?? ba.error ?? ar.error;
       if (firstError) return setError(firstError.message);
       setError(null);
-      setRows((inv.data ?? []) as InvoiceRow[]);
-      setSick((sd.data ?? []) as SickDate[]);
-      setDebt(((ba.data ?? []) as Balance[]).find((b) => b.student_id === studentId) ?? null);
-      setArchive((ar.data ?? []) as ArchiveRow[]);
+      setData({
+        rows: (inv.data ?? []) as InvoiceRow[],
+        sick: (sd.data ?? []) as SickDate[],
+        debt: ((ba.data ?? []) as Balance[]).find((b) => b.student_id === studentId) ?? null,
+        archive: (ar.data ?? []) as ArchiveRow[],
+      });
     })();
     return () => {
       alive = false;
     };
   }, [studentId, ym, reload]);
+
+  return { data, error, reload: () => setReload((v) => v + 1) };
+}
+
+// Выписка: сколько занятий по какой цене
+function Breakdown({ rows, sick }: { rows: InvoiceRow[]; sick: SickDate[] }) {
+  return (
+    <div className="no-print">
+      {rows.map((r) => {
+        const p = r.price_kopecks;
+        const single = r.single_price_kopecks;
+        const sd = sick.filter((d) => d.group_id === r.group_id);
+        const sickPaid = r.sick_count > 0 && r.sick_count <= 4;
+        const nRegular = sickPaid ? sd.filter((d) => d.kind === 'regular' || single == null).length : 0;
+        const nSingle = sickPaid ? r.sick_count - nRegular : 0;
+
+        const lines: { label: string; n: number; price: number | null; sum: number }[] = [];
+        if (r.attended_count > 0) {
+          lines.push({ label: '«+» был(а)', n: r.attended_count, price: p, sum: r.attended_count * (p ?? 0) });
+        }
+        if (r.absent_count > 0) {
+          lines.push({ label: '«−» не был(а), оплачивается как «+»', n: r.absent_count, price: p, sum: r.absent_count * (p ?? 0) });
+        }
+        if (nSingle > 0) {
+          lines.push({ label: '«б» по тарифу разового занятия', n: nSingle, price: single, sum: nSingle * (single ?? 0) });
+        }
+        if (nRegular > 0) {
+          lines.push({ label: '«б» по регулярному тарифу', n: nRegular, price: p, sum: nRegular * (p ?? 0) });
+        }
+        if (r.sick_count > 4) {
+          lines.push({ label: '«б» больше 4 за месяц: не оплачиваются', n: r.sick_count, price: null, sum: 0 });
+        }
+        if (r.trial_count > 0) {
+          lines.push({ label: '«п» пробное: не оплачивается', n: r.trial_count, price: null, sum: 0 });
+        }
+        const services = lines.reduce((s, l) => s + l.sum, 0);
+
+        return (
+          <div key={r.group_id} className="detail-group">
+            <h4>
+              {r.group_name}
+              {r.teacher_name && <span className="muted"> · {r.teacher_name}</span>}
+            </h4>
+            {r.lessons_without_price > 0 && (
+              <p className="error small">У группы не задана регулярная цена, суммы по занятиям посчитать нельзя.</p>
+            )}
+            <table className="detail-table">
+              <thead>
+                <tr>
+                  <th>Отметка</th>
+                  <th className="num">Занятий</th>
+                  <th className="num">Цена</th>
+                  <th className="num">Сумма</th>
+                </tr>
+              </thead>
+              <tbody>
+                {lines.map((l) => (
+                  <tr key={l.label}>
+                    <td>{l.label}</td>
+                    <td className="num">{l.n}</td>
+                    <td className="num">{l.price === null ? '—' : formatMoney(l.price)}</td>
+                    <td className="num">{formatMoney(l.sum)}</td>
+                  </tr>
+                ))}
+                {lines.length === 0 && (
+                  <tr>
+                    <td colSpan={4} className="muted">
+                      Занятий в этом месяце нет.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+              <tfoot>
+                <tr>
+                  <td colSpan={3}>Стоимость услуг за месяц</td>
+                  <td className="num">{formatMoney(services)}</td>
+                </tr>
+              </tfoot>
+            </table>
+            {r.carry_count > 0 && (
+              <p className="small">
+                Перенесётся на следующий месяц: {pluralLessons(r.carry_count)}, {formatMoney(r.carry_kopecks)}.
+              </p>
+            )}
+            <p className="small detail-total">
+              Выставлено к оплате: абонемент {r.lessons_count} × {p === null ? '—' : formatMoney(p)} = {formatMoney(r.gross_kopecks)}
+              {r.sick_adjust_kopecks !== 0 && <>; доплата за «б» по разовому тарифу {formatMoney(r.sick_adjust_kopecks)}</>}
+              {r.credit_in_kopecks > 0 && <>; зачтено с прошлого месяца −{formatMoney(r.credit_in_kopecks)}</>}
+              {' '}
+              → <strong>{formatMoney(r.charge_kopecks)}</strong>
+            </p>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// «б» (болезнь): по умолчанию по разовому тарифу, можно пересчитать в регулярное
+function SickPanel({
+  rows,
+  sick,
+  busy,
+  onChoose,
+  onAllRegular,
+}: {
+  rows: InvoiceRow[];
+  sick: SickDate[];
+  busy: boolean;
+  onChoose: (d: SickDate, kind: 'regular' | 'single') => void;
+  onAllRegular: () => void;
+}) {
+  const sickByGroup = new Map<string, number>();
+  for (const r of rows) sickByGroup.set(r.group_id, r.sick_count);
+  const choosable = sick.filter((d) => (sickByGroup.get(d.group_id) ?? 0) <= 4);
+  const unpaid = rows.filter((r) => r.sick_count > 4);
+  const priceFor = (d: SickDate) => rows.find((r) => r.group_id === d.group_id);
+
+  if (choosable.length === 0 && unpaid.length === 0) return null;
+
+  return (
+    <div className="no-print">
+      {choosable.length > 0 && (
+        <div className="panel">
+          <h3>«б» (болезнь): пересчёт по тарифу разового занятия</h3>
+          <p className="muted small">
+            За месяц «б» не больше 4, поэтому они пересчитаны по цене разового занятия. Если нужно, пересчитайте нужную
+            дату в регулярное. Если «б» больше 4, они не оплачиваются и переносятся на следующий месяц.
+          </p>
+          {choosable.filter((d) => (d.kind ?? 'single') === 'single').length > 1 && (
+            <div className="field-actions" style={{ marginBottom: 8 }}>
+              <button type="button" className="btn btn-sm" disabled={busy} onClick={onAllRegular}>
+                Пересчитать все в регулярное
+              </button>
+            </div>
+          )}
+          {choosable.map((d) => {
+            const r = priceFor(d);
+            const kind = d.kind ?? 'single';
+            const noSingle = r?.single_price_kopecks == null;
+            return (
+              <div key={`${d.group_id}-${d.lesson_date}`} className="sick-row">
+                <div>
+                  {formatDate(d.lesson_date)}
+                  <span className="muted small"> · {d.group_name}</span>
+                  <div className="small">
+                    {kind === 'regular' ? (
+                      <>пересчитано по регулярному тарифу{r?.price_kopecks != null ? ` · ${formatMoney(r.price_kopecks)}` : ''}</>
+                    ) : noSingle ? (
+                      <span className="error">разовая цена группы не задана, «б» считается по регулярной</span>
+                    ) : (
+                      <>пересчёт «б» по тарифу разового занятия · {formatMoney(r?.single_price_kopecks ?? 0)}</>
+                    )}
+                  </div>
+                </div>
+                <div className="sick-choice">
+                  {kind === 'single' ? (
+                    <button type="button" className="btn btn-sm" disabled={busy} onClick={() => onChoose(d, 'regular')}>
+                      Пересчитать в регулярное
+                    </button>
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn btn-sm"
+                      disabled={busy || noSingle}
+                      onClick={() => onChoose(d, 'single')}
+                      title={noSingle ? 'У группы не задана разовая цена' : ''}
+                    >
+                      Вернуть по разовому
+                    </button>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+      {unpaid.length > 0 && (
+        <p className="muted small">
+          «б» больше 4 за месяц: {unpaid.map((r) => `${r.group_name} (${r.sick_count})`).join(', ')}. Они не оплачиваются,{' '}
+          {pluralLessons(unpaid.reduce((s, r) => s + r.sick_count, 0))} перенесутся на следующий месяц.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function StudentMonthCard({
+  studentId,
+  ym,
+  initialAct,
+  onChanged,
+}: {
+  studentId: string;
+  ym: string;
+  initialAct?: boolean;
+  onChanged?: () => void;
+}) {
+  const { data, error, reload } = useStudentMonth(studentId, ym);
+  const [showAct, setShowAct] = useState(!!initialAct);
+  const [viewing, setViewing] = useState<ActData | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = () => {
+    reload();
+    onChanged?.();
+  };
+
+  if (error) return <p className="error no-print">Не удалось загрузить данные: {error}</p>;
+  if (!data) {
+    return (
+      <div className="no-print">
+        <span className="skeleton skeleton-line" style={{ width: '60%' }} />
+        <span className="skeleton skeleton-line" />
+      </div>
+    );
+  }
+
+  const mine = studentRows(data.rows, studentId);
+  const stop = blockers(mine);
+  const act = mine.length > 0 ? buildAct(mine, ym, data.debt?.debt_kopecks ?? 0) : null;
+  const shown = viewing ?? act;
+  const archivedThis = data.archive.find((a) => monthOf(a.month) === ym) ?? null;
+
+  const choose = async (d: SickDate, kind: 'regular' | 'single') => {
+    setBusy(true);
+    setErr(null);
+    const { error: e } = await supabase
+      .from('sick_pricing')
+      .upsert(
+        { group_id: d.group_id, student_id: studentId, lesson_date: d.lesson_date, kind },
+        { onConflict: 'group_id,student_id,lesson_date' },
+      );
+    setBusy(false);
+    if (e) return setErr(e.message);
+    refresh();
+  };
+
+  const allRegular = async () => {
+    const sickByGroup = new Map<string, number>();
+    for (const r of mine) sickByGroup.set(r.group_id, r.sick_count);
+    const todo = data.sick.filter((d) => (sickByGroup.get(d.group_id) ?? 0) <= 4 && (d.kind ?? 'single') === 'single');
+    if (todo.length === 0) return;
+    setBusy(true);
+    setErr(null);
+    const { error: e } = await supabase.from('sick_pricing').upsert(
+      todo.map((d) => ({ group_id: d.group_id, student_id: studentId, lesson_date: d.lesson_date, kind: 'regular' })),
+      { onConflict: 'group_id,student_id,lesson_date' },
+    );
+    setBusy(false);
+    if (e) return setErr(e.message);
+    refresh();
+  };
+
+  const print = () => {
+    setShowAct(true);
+    // даём странице нарисовать акт и только потом открываем печать
+    setTimeout(() => window.print(), 100);
+  };
+
+  const makePdf = async () => {
+    if (!act) return;
+    setBusy(true);
+    setErr(null);
+    const saveErr = await saveToArchive([{ studentId, act }]);
+    setBusy(false);
+    if (saveErr) setErr(`Акт не сохранён в архив: ${saveErr}`);
+    setShowAct(true);
+    setTimeout(() => {
+      window.print();
+      if (!saveErr) refresh();
+    }, 100);
+  };
+
+  return (
+    <div className="student-card">
+      <div className="no-print">
+        <div className="field-actions" style={{ marginBottom: 8 }}>
+          {viewing ? (
+            <>
+              <button type="button" className="btn btn-sm" onClick={() => setViewing(null)}>
+                Закрыть сохранённый акт
+              </button>
+              <button type="button" className="btn btn-primary btn-sm" onClick={print}>
+                Печать / PDF
+              </button>
+            </>
+          ) : (
+            act && (
+              <>
+                <button type="button" className="btn btn-sm" onClick={() => setShowAct((v) => !v)}>
+                  {showAct ? 'Скрыть акт' : 'Показать акт'}
+                </button>
+                <button type="button" className="btn btn-primary btn-sm" onClick={makePdf} disabled={busy || stop.length > 0}>
+                  Сформировать PDF
+                </button>
+              </>
+            )
+          )}
+        </div>
+        {err && <p className="error">{err}</p>}
+        {!viewing && stop.length > 0 && <p className="error">Акт нельзя сформировать: {stop.join('; ')}.</p>}
+        {mine.length === 0 && !viewing && (
+          <p className="muted">
+            За {formatMonth(ym).toLowerCase()} у ученика нет занятий по расписанию: он не состоит в группе или у группы нет
+            расписания.
+          </p>
+        )}
+      </div>
+
+      {!viewing && mine.length > 0 && <Breakdown rows={mine} sick={data.sick} />}
+      {!viewing && <SickPanel rows={mine} sick={data.sick} busy={busy} onChoose={choose} onAllRegular={allRegular} />}
+
+      {showAct && shown && <ActSheet a={shown} />}
+
+      {!viewing && act && (
+        <div className="panel no-print">
+          <h3>К оплате за {formatMonth(ym).toLowerCase()}</h3>
+          <p>
+            <strong>{formatMoney(act.dueKopecks)}</strong>
+            {data.debt && (
+              <>
+                {' '}
+                · баланс на конец месяца: <Debt kopecks={data.debt.debt_kopecks} />
+              </>
+            )}
+          </p>
+          {archivedThis && archivedThis.total_kopecks !== act.dueKopecks && (
+            <p className="error small">
+              В сформированном акте была сумма {formatMoney(archivedThis.total_kopecks)}, сейчас расчёт даёт{' '}
+              {formatMoney(act.dueKopecks)}: отметки или цены менялись после формирования.
+            </p>
+          )}
+          <p className="muted small">Расчёт считается на сегодняшних данных и меняется, если поправить отметки или цены.</p>
+        </div>
+      )}
+
+      <div className="panel no-print">
+        <h3>Сформированные акты</h3>
+        {data.archive.length === 0 ? (
+          <p className="muted small">Акты пока не формировались. После нажатия «Сформировать PDF» акт появится здесь.</p>
+        ) : (
+          <>
+            <p className="muted small">Сумма и текст акта сохраняются при каждом формировании PDF.</p>
+            <div className="pay-list">
+              {data.archive.map((a) => (
+                <div key={a.month} className="pay-row">
+                  <span>{formatMonth(monthOf(a.month))}</span>
+                  <strong>{formatMoney(a.total_kopecks)}</strong>
+                  <span className="muted small">от {formatDate(a.generated_at.slice(0, 10))}</span>
+                  <button
+                    type="button"
+                    className="btn btn-sm"
+                    onClick={() => {
+                      setViewing(a.payload);
+                      setShowAct(true);
+                    }}
+                  >
+                    Открыть
+                  </button>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Вкладка «Акт ученика» ----------
+
+function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPick: (id: string | null) => void; ym: string }) {
+  const dir = useDirectory();
 
   if (!studentId) {
     return (
@@ -604,170 +1013,16 @@ function InvoiceTab({ studentId, onPick, ym }: { studentId: string | null; onPic
   }
 
   const st = dir.studentById.get(studentId);
-  const mine = rows ? studentRows(rows, studentId) : [];
-  const stop = blockers(mine);
-  const act = mine.length > 0 ? buildAct(mine, ym, debt?.debt_kopecks ?? 0) : null;
-  const shown = viewing ?? act;
-
-  // Выбор по «б» нужен только в группах, где «б» за месяц не больше 4
-  const sickByGroup = new Map<string, number>();
-  for (const r of mine) sickByGroup.set(r.group_id, r.sick_count);
-  const choosable = sick.filter((d) => (sickByGroup.get(d.group_id) ?? 0) <= 4);
-  const unpaidGroups = mine.filter((r) => r.sick_count > 4);
-
-  const choose = async (d: SickDate, kind: 'regular' | 'single') => {
-    setBusy(true);
-    setError(null);
-    const { error: e } = await supabase
-      .from('sick_pricing')
-      .upsert(
-        { group_id: d.group_id, student_id: studentId, lesson_date: d.lesson_date, kind },
-        { onConflict: 'group_id,student_id,lesson_date' },
-      );
-    setBusy(false);
-    if (e) return setError(e.message);
-    setReload((v) => v + 1);
-  };
-
-  const print = async () => {
-    if (!act) return;
-    setBusy(true);
-    const err = await saveToArchive([{ studentId, act }]);
-    setBusy(false);
-    if (err) setError(`Акт не сохранён в архив: ${err}`);
-    window.print();
-    if (!err) setReload((v) => v + 1);
-  };
-
-  const priceFor = (d: SickDate) => mine.find((r) => r.group_id === d.group_id);
 
   return (
     <div>
       <div className="pay-head no-print">
         <h2>{st?.full_name ?? 'Ученик'}</h2>
-        <div className="field-actions">
-          <button type="button" className="btn btn-sm" onClick={() => onPick(null)}>
-            Сменить ученика
-          </button>
-          {viewing ? (
-            <>
-              <button type="button" className="btn btn-sm" onClick={() => setViewing(null)}>
-                Закрыть сохранённый акт
-              </button>
-              <button type="button" className="btn btn-primary btn-sm" onClick={() => window.print()}>
-                Печать / PDF
-              </button>
-            </>
-          ) : (
-            act && (
-              <button type="button" className="btn btn-primary btn-sm" onClick={print} disabled={busy || stop.length > 0}>
-                Сформировать PDF
-              </button>
-            )
-          )}
-        </div>
+        <button type="button" className="btn btn-sm" onClick={() => onPick(null)}>
+          Сменить ученика
+        </button>
       </div>
-
-      {error && <p className="error no-print">{error}</p>}
-      {!rows && !error && <span className="skeleton skeleton-line no-print" style={{ width: '60%' }} />}
-      {rows && mine.length === 0 && !viewing && (
-        <p className="muted no-print">
-          За {formatMonth(ym).toLowerCase()} у ученика нет занятий по расписанию: он не состоит в группе или у группы нет
-          расписания.
-        </p>
-      )}
-
-      {!viewing && stop.length > 0 && (
-        <p className="error no-print">Акт нельзя сформировать: {stop.join('; ')}.</p>
-      )}
-
-      {!viewing && choosable.length > 0 && (
-        <div className="panel no-print">
-          <h3>Как считать «б» (болезнь)?</h3>
-          <p className="muted small">
-            За месяц «б» не больше 4. Для каждого занятия выберите цену: разовую или регулярную. Если «б» больше 4, они не
-            оплачиваются и переносятся на следующий месяц, выбор не нужен.
-          </p>
-          {choosable.map((d) => {
-            const r = priceFor(d);
-            return (
-              <div key={`${d.group_id}-${d.lesson_date}`} className="sick-row">
-                <div>
-                  {formatDate(d.lesson_date)}
-                  <span className="muted small"> · {d.group_name}</span>
-                </div>
-                <div className="sick-choice">
-                  <button
-                    type="button"
-                    className={`btn btn-sm${d.kind === 'single' ? ' btn-primary' : ''}`}
-                    disabled={busy || r?.single_price_kopecks == null}
-                    onClick={() => choose(d, 'single')}
-                    title={r?.single_price_kopecks == null ? 'У группы не задана разовая цена' : ''}
-                  >
-                    Разовое{r?.single_price_kopecks != null ? ` · ${formatMoney(r.single_price_kopecks)}` : ''}
-                  </button>
-                  <button
-                    type="button"
-                    className={`btn btn-sm${d.kind === 'regular' ? ' btn-primary' : ''}`}
-                    disabled={busy}
-                    onClick={() => choose(d, 'regular')}
-                  >
-                    Регулярное{r?.price_kopecks != null ? ` · ${formatMoney(r.price_kopecks)}` : ''}
-                  </button>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {!viewing && unpaidGroups.length > 0 && (
-        <p className="muted small no-print">
-          «б» больше 4 за месяц: {unpaidGroups.map((r) => `${r.group_name} (${r.sick_count})`).join(', ')}. Они не
-          оплачиваются, {pluralLessons(unpaidGroups.reduce((s, r) => s + r.sick_count, 0))} перенесутся на следующий месяц.
-        </p>
-      )}
-
-      {shown && <ActSheet a={shown} />}
-
-      {!viewing && act && (
-        <div className="panel no-print">
-          <h3>Расчёт за {formatMonth(ym).toLowerCase()}</h3>
-          <p className="small">
-            Занятий по расписанию: {act.lessons} · абонемент {formatMoney(act.subscriptionKopecks)}
-            {act.creditInKopecks > 0 && <> · зачтено с прошлого месяца −{formatMoney(act.creditInKopecks)}</>}
-            {act.sickAdjustKopecks !== 0 && <> · доплата за «б» {formatMoney(act.sickAdjustKopecks)}</>}
-          </p>
-          <p>
-            <strong>К оплате за месяц: {formatMoney(act.dueKopecks)}</strong>
-            {debt && (
-              <>
-                {' '}
-                · баланс на конец месяца: <Debt kopecks={debt.debt_kopecks} />
-              </>
-            )}
-          </p>
-          <p className="muted small">Баланс и расчёт считаются на сегодняшних данных и могут измениться, если поправить отметки.</p>
-        </div>
-      )}
-
-      {archive.length > 0 && (
-        <div className="panel no-print">
-          <h3>Сохранённые акты</h3>
-          <p className="muted small">Сумма и данные акта сохраняются при каждом формировании PDF.</p>
-          <div className="pay-list">
-            {archive.map((a) => (
-              <div key={a.month} className="pay-row">
-                <span>{formatMonth(monthOf(a.month))}</span>
-                <strong>{formatMoney(a.total_kopecks)}</strong>
-                <span className="muted small">от {formatDate(a.generated_at.slice(0, 10))}</span>
-                <button type="button" className="btn btn-sm" onClick={() => setViewing(a.payload)}>
-                  Открыть
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
+      <StudentMonthCard key={`${studentId}|${ym}`} studentId={studentId} ym={ym} initialAct />
     </div>
   );
 }
@@ -877,7 +1132,10 @@ function GroupTab({ ym, onOpen }: { ym: string; onOpen: (id: string) => void }) 
                     ) : (
                       <span className="muted small">готов к печати</span>
                     )}
-                    {m.stop.length > 0 && (
+                    {m.all.some((r) => r.sick_count > 0 && r.sick_count <= 4) && (
+                      <span className="muted small">есть «б»: пересчитаны по разовому тарифу</span>
+                    )}
+                    {(m.stop.length > 0 || m.all.some((r) => r.sick_count > 0 && r.sick_count <= 4)) && (
                       <button type="button" className="btn btn-sm" style={{ marginTop: 6 }} onClick={() => onOpen(m.id)}>
                         Открыть
                       </button>
@@ -969,10 +1227,6 @@ export default function Billing() {
           onPay={(id) => {
             setStudentId(id);
             setTab('payment');
-          }}
-          onInvoice={(id) => {
-            setStudentId(id);
-            setTab('invoice');
           }}
         />
       )}
