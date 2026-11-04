@@ -16,7 +16,7 @@ import {
   shiftMonth,
   weekdayShort,
 } from '../lib/dates';
-import { ageYears, pluralYears, timeHM, todayMinsk } from '../lib/format';
+import { ageYears, formatMoney, pluralYears, timeHM, todayMinsk } from '../lib/format';
 import { useDirectory } from '../lib/store';
 
 // В базе хранятся только исключения («−», «б», «п»). Кто не указан, у того «+».
@@ -25,9 +25,16 @@ interface LessonData {
   cancelled: boolean;
   marks: Map<string, Mark>;
 }
+type SickKind = 'regular' | 'single';
 interface MonthData {
   key: string;
   lessons: Map<string, LessonData>;
+  sick: Map<string, SickKind>; // выбор админа по «б»: ключ «дата|ученик»
+}
+interface PriceRow {
+  kind: SickKind;
+  price_kopecks: number;
+  valid_from: string;
 }
 interface LessonRow {
   id: string;
@@ -37,6 +44,7 @@ interface LessonRow {
 }
 
 const EMPTY_LESSONS: Map<string, LessonData> = new Map();
+const EMPTY_SICK: Map<string, SickKind> = new Map();
 
 function friendlyError(e: { code?: string; message: string }): string {
   if (e.code === '42501') return 'Править эту дату нельзя. Учитель может менять сегодняшний день и 3 предыдущих.';
@@ -62,6 +70,7 @@ export default function AttendanceGroup() {
   const [flash, setFlash] = useState<string | null>(null);
   const [addingDate, setAddingDate] = useState(false);
   const [newDate, setNewDate] = useState(today);
+  const [prices, setPrices] = useState<PriceRow[]>([]);
 
   const group = dir.groupById.get(groupId);
   const slots = useMemo(() => dir.slotsByGroup.get(groupId) ?? [], [dir.slotsByGroup, groupId]);
@@ -70,6 +79,11 @@ export default function AttendanceGroup() {
   const monthReady = month !== null && month.key === key;
   const lessonsMap: Map<string, LessonData> = useMemo(
     () => (month !== null && month.key === key ? month.lessons : EMPTY_LESSONS),
+    [month, key],
+  );
+
+  const sickMap: Map<string, SickKind> = useMemo(
+    () => (month !== null && month.key === key ? month.sick : EMPTY_SICK),
     [month, key],
   );
 
@@ -88,6 +102,19 @@ export default function AttendanceGroup() {
       .gte('lesson_date', from)
       .lte('lesson_date', to);
     if (e) return setLoadError(e.message);
+    const sick = new Map<string, SickKind>();
+    if (isAdmin) {
+      const sp = await supabase
+        .from('sick_pricing')
+        .select('student_id, lesson_date, kind')
+        .eq('group_id', groupId)
+        .gte('lesson_date', from)
+        .lte('lesson_date', to);
+      if (sp.error) return setLoadError(sp.error.message);
+      for (const r of (sp.data ?? []) as { student_id: string; lesson_date: string; kind: SickKind }[]) {
+        sick.set(`${r.lesson_date}|${r.student_id}`, r.kind);
+      }
+    }
     setLoadError(null);
     const lessons = new Map<string, LessonData>();
     for (const l of (data ?? []) as unknown as LessonRow[]) {
@@ -97,12 +124,27 @@ export default function AttendanceGroup() {
         marks: new Map<string, Mark>(l.attendance.filter((a) => a.mark !== 'present').map((a) => [a.student_id, a.mark])),
       });
     }
-    setMonth({ key: `${groupId}|${ym}`, lessons });
-  }, [groupId, ym]);
+    setMonth({ key: `${groupId}|${ym}`, lessons, sick });
+  }, [groupId, ym, isAdmin]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => {
+    if (!isAdmin || !groupId) return;
+    let alive = true;
+    supabase
+      .from('group_prices')
+      .select('kind, price_kopecks, valid_from')
+      .eq('group_id', groupId)
+      .then(({ data }) => {
+        if (alive && data) setPrices(data as PriceRow[]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [isAdmin, groupId]);
 
   // Даты занятий месяца: по расписанию, плюс внеплановые с изменениями и добавленные вручную.
   const dates = useMemo(() => {
@@ -168,6 +210,38 @@ export default function AttendanceGroup() {
   );
 
   const markOf = (d: string, sid: string): Mark => lessonsMap.get(d)?.marks.get(sid) ?? 'present';
+
+  // Цена занятия группы на первое число месяца (как в расчёте счёта)
+  const priceOn = (kind: SickKind): number | null => {
+    const first = `${ym}-01`;
+    const list = prices.filter((p) => p.kind === kind && p.valid_from <= first).sort((a, b) => b.valid_from.localeCompare(a.valid_from));
+    return list.length > 0 ? list[0].price_kopecks : null;
+  };
+
+  // Сколько «б» у ученика за месяц (в счёт идут только занятия по расписанию)
+  const sickCountOf = (sid: string): number => {
+    let n = 0;
+    for (const [d, l] of lessonsMap) {
+      if (!l.cancelled && !isExtra(d) && l.marks.get(sid) === 'sick') n += 1;
+    }
+    return n;
+  };
+
+  const chooseSick = async (d: string, studentId: string, kind: SickKind) => {
+    setError(null);
+    setMonth((m: MonthData | null) => {
+      if (!m) return m;
+      const sick = new Map<string, SickKind>(m.sick);
+      sick.set(`${d}|${studentId}`, kind);
+      return { ...m, sick };
+    });
+    const { error: e } = await supabase
+      .from('sick_pricing')
+      .upsert({ group_id: groupId, student_id: studentId, lesson_date: d, kind }, { onConflict: 'group_id,student_id,lesson_date' });
+    if (e) setError(e.message);
+    else setFlash('Цена для «б» сохранена');
+    await load();
+  };
 
   const changeMonth = (delta: number) => {
     setSelected(null);
@@ -459,6 +533,41 @@ export default function AttendanceGroup() {
                               </button>
                             ))}
                           </div>
+                          {isAdmin && current === 'sick' && r.enrolled && (
+                            <div className="att-sick">
+                              {sickCountOf(r.id) > 4 ? (
+                                <span className="small">
+                                  «б» больше 4 за месяц ({sickCountOf(r.id)}): не оплачиваются, перенесутся на следующий месяц.
+                                </span>
+                              ) : (
+                                <>
+                                  <span className="small">Как считать «б»:</span>
+                                  {(['single', 'regular'] as SickKind[]).map((k) => {
+                                    const price = priceOn(k);
+                                    const active = (sickMap.get(`${selected}|${r.id}`) ?? 'single') === k;
+                                    return (
+                                      <button
+                                        type="button"
+                                        key={k}
+                                        className={`btn btn-sm${active ? ' btn-primary' : ''}`}
+                                        disabled={price === null}
+                                        title={price === null ? 'У группы не задана эта цена' : ''}
+                                        onClick={() => {
+                                          if (!active) void chooseSick(selected, r.id, k);
+                                        }}
+                                      >
+                                        {k === 'single' ? 'Разовое' : 'Регулярное'}
+                                        {price !== null ? ` · ${formatMoney(price)}` : ''}
+                                      </button>
+                                    );
+                                  })}
+                                  {priceOn('single') === null && (
+                                    <span className="error small">разовая цена не задана: «б» считается по регулярной</span>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
