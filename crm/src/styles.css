@@ -634,3 +634,25 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
   .act-sheet { border: 0; border-radius: 0; padding: 0; margin: 0; max-width: none; break-after: page; page-break-after: always; }
   .act-sheet:last-child { break-after: auto; page-break-after: auto; }
 }
+
+/* «б» в посещаемости: выбор цены рядом с отметкой (только админ) */
+.att-sick { flex-basis: 100%; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 4px 0 2px; }
+@media (min-width: 800px) {
+  .att-row { flex-wrap: wrap; }
+}
+
+/* Баланс: подробности ученика */
+.bal-item { border-bottom: 1px solid var(--line); }
+.bal-item .bal-row { border-bottom: 0; }
+.bal-archived { color: #1e6b3c; }
+.bal-detail { background: var(--bg-alt); border-radius: var(--radius); padding: 12px; margin: 0 0 12px; }
+.student-card .panel { background: var(--bg); }
+.detail-group { background: var(--bg); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; margin-bottom: 12px; }
+.detail-group h4 { margin: 0 0 8px; font-size: 16px; font-weight: 500; }
+.detail-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.detail-table th, .detail-table td { padding: 6px 4px; text-align: left; border-bottom: 1px solid var(--line); }
+.detail-table th { font-weight: 400; color: var(--muted); }
+.detail-table .num { text-align: right; white-space: nowrap; }
+.detail-table tfoot td { font-weight: 500; border-bottom: 0; }
+.detail-total { margin: 8px 0 0; }
+.app-version { text-align: center; padding: 16px 0 24px; }
