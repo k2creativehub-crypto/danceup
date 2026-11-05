@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { supabase } from '../supabase';
 import { useAuth } from '../auth';
 import EditableField from '../components/EditableField';
+import Discounts from '../components/Discounts';
 import type { Option } from '../components/EditableField';
 import { updateRow } from '../lib/db';
 import { PHONE_HINT, normalizePhone } from '../lib/phone';
@@ -365,6 +366,8 @@ export default function StudentCard() {
           <p className="muted">Родитель не указан.</p>
         )}
       </section>
+
+      {isAdmin && <Discounts studentId={s.id} />}
 
       <section>
         <h2 className="section-title">Группы и зачисления</h2>
