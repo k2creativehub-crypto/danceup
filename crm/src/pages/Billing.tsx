@@ -41,6 +41,7 @@ interface InvoiceRow {
   lessons_without_price: number;
   charge_kopecks: number;
   single_price_kopecks: number | null;
+  discount_kopecks?: number | null;
 }
 interface SickDate {
   group_id: string;
@@ -454,9 +455,160 @@ function BalanceTab({ ym, onPay }: { ym: string; onPay: (id: string) => void }) 
 
 // ---------- Вкладка «Оплата» ----------
 
+// ---------- Оплата по группе: выбрать группу и внести оплату каждому ученику ----------
+
+function GroupPayments({ onOpenStudent }: { onOpenStudent: (id: string) => void }) {
+  const dir = useDirectory();
+  const [groupId, setGroupId] = useState('');
+  const [date, setDate] = useState(todayMinsk());
+  const [amounts, setAmounts] = useState<Record<string, string>>({});
+  const [balances, setBalances] = useState<Balance[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+  const [reload, setReload] = useState(0);
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const { data, error } = await supabase.rpc('student_balances', { p_to: todayMinsk() });
+      if (!alive) return;
+      if (error) return setErr(error.message);
+      setBalances((data ?? []) as Balance[]);
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [reload]);
+
+  const groupOptions = useMemo(
+    () => dir.groups.filter((g) => !g.is_archived).sort((a, b) => byName(a.name, b.name)),
+    [dir.groups],
+  );
+
+  // Ученики группы: занимаются и выбывшие (резерв не платит)
+  const members = useMemo(() => {
+    if (!groupId) return [];
+    const seen = new Set<string>();
+    const list: { id: string; name: string; status: string }[] = [];
+    for (const e of dir.enrollmentsByGroup.get(groupId) ?? []) {
+      if (e.status === 'reserve' || seen.has(e.student_id)) continue;
+      const st = dir.studentById.get(e.student_id);
+      if (!st) continue;
+      seen.add(e.student_id);
+      list.push({ id: st.id, name: st.full_name, status: e.status });
+    }
+    return list.sort((a, b) => byName(a.name, b.name));
+  }, [groupId, dir.enrollmentsByGroup, dir.studentById]);
+
+  const entered = members
+    .map((m) => ({ m, text: (amounts[m.id] ?? '').trim() }))
+    .filter((x) => x.text !== '');
+  const parsed = entered.map((x) => ({ ...x, kopecks: parseMoney(x.text) }));
+  const total = parsed.reduce((sum, x) => sum + (x.kopecks && x.kopecks > 0 ? x.kopecks : 0), 0);
+
+  const pickGroup = (id: string) => {
+    setGroupId(id);
+    setAmounts({});
+    setErr(null);
+    setDone(null);
+  };
+
+  const save = async () => {
+    setDone(null);
+    if (parsed.length === 0) return setErr('Введите сумму хотя бы одному ученику');
+    const bad = parsed.find((x) => x.kopecks === null || x.kopecks <= 0);
+    if (bad) return setErr(`Сумма у ученика «${bad.m.name}» указана неверно. Введите число, например 100 или 87,50`);
+    if (!date) return setErr('Укажите дату оплаты');
+    setBusy(true);
+    setErr(null);
+    const { error } = await supabase
+      .from('payments')
+      .insert(parsed.map((x) => ({ student_id: x.m.id, paid_on: date, amount_kopecks: x.kopecks as number })));
+    setBusy(false);
+    if (error) return setErr(`Оплаты не внесены: ${error.message}`);
+    setDone(`Внесено оплат: ${parsed.length} на сумму ${formatMoney(total)} (дата ${formatDate(date)}).`);
+    setAmounts({});
+    setReload((v) => v + 1);
+  };
+
+  return (
+    <div className="panel">
+      <h2>Оплата по группе</h2>
+      <div className="pay-group-top">
+        <label className="field" style={{ maxWidth: 460 }}>
+          <span>Группа</span>
+          <select value={groupId} onChange={(e) => pickGroup(e.target.value)}>
+            <option value="">— выберите группу —</option>
+            {groupOptions.map((g) => (
+              <option key={g.id} value={g.id}>
+                {g.name} · {g.teacher?.full_name ?? ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span>Дата оплаты</span>
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+        </label>
+      </div>
+
+      {groupId && members.length === 0 && <p className="muted">В группе нет учеников, которые платят.</p>}
+
+      {groupId && members.length > 0 && (
+        <>
+          <div className="bal-list">
+            {members.map((m) => {
+              const b = balances?.find((x) => x.student_id === m.id);
+              return (
+                <div key={m.id} className="pay-group-row">
+                  <div className="pay-group-name">
+                    <strong>{m.name}</strong>
+                    {m.status === 'left' && <span className="muted small"> · выбыл(а)</span>}
+                    <div className="small">
+                      {b ? <Debt kopecks={b.debt_kopecks} /> : <span className="muted">…</span>}
+                      <button type="button" className="link-btn" onClick={() => onOpenStudent(m.id)}>
+                        история оплат
+                      </button>
+                    </div>
+                  </div>
+                  <input
+                    className="pay-group-amount"
+                    inputMode="decimal"
+                    placeholder="Сумма, BYN"
+                    aria-label={`Сумма оплаты: ${m.name}`}
+                    value={amounts[m.id] ?? ''}
+                    onChange={(e) => setAmounts((prev) => ({ ...prev, [m.id]: e.target.value }))}
+                  />
+                </div>
+              );
+            })}
+          </div>
+
+          {err && <p className="error">{err}</p>}
+          {done && <p className="debt-neg">{done}</p>}
+          <div className="field-actions" style={{ marginTop: 12 }}>
+            <button type="button" className="btn btn-primary" onClick={save} disabled={busy || entered.length === 0}>
+              {busy ? 'Вносим…' : entered.length > 0 ? `Внести оплаты (${entered.length}) на ${formatMoney(total)}` : 'Внести оплаты'}
+            </button>
+            {entered.length > 0 && (
+              <button type="button" className="btn" onClick={() => setAmounts({})} disabled={busy}>
+                Очистить суммы
+              </button>
+            )}
+          </div>
+          <p className="muted small">Долг показан на сегодня. Пустые поля пропускаются. Оплаты сохраняются все сразу.</p>
+        </>
+      )}
+      {!groupId && err && <p className="error">{err}</p>}
+    </div>
+  );
+}
+
 function PaymentTab({ studentId, onPick }: { studentId: string | null; onPick: (id: string | null) => void }) {
   const dir = useDirectory();
   const today = todayMinsk();
+  const [mode, setMode] = useState<'student' | 'group'>('student');
   const [payments, setPayments] = useState<Payment[] | null>(null);
   const [balance, setBalance] = useState<Balance | null>(null);
   const [date, setDate] = useState(today);
@@ -490,9 +642,23 @@ function PaymentTab({ studentId, onPick }: { studentId: string | null; onPick: (
 
   if (!studentId) {
     return (
-      <div className="panel">
-        <h2>Внести оплату</h2>
-        <StudentSearch students={dir.students} excludeIds={new Set()} onPick={(s) => onPick(s.id)} autoFocus />
+      <div>
+        <div className="tabs pay-mode" role="tablist">
+          <button type="button" role="tab" aria-selected={mode === 'student'} className={`tab${mode === 'student' ? ' is-active' : ''}`} onClick={() => setMode('student')}>
+            По ученику
+          </button>
+          <button type="button" role="tab" aria-selected={mode === 'group'} className={`tab${mode === 'group' ? ' is-active' : ''}`} onClick={() => setMode('group')}>
+            По группе
+          </button>
+        </div>
+        {mode === 'student' ? (
+          <div className="panel">
+            <h2>Внести оплату</h2>
+            <StudentSearch students={dir.students} excludeIds={new Set()} onPick={(s) => onPick(s.id)} autoFocus />
+          </div>
+        ) : (
+          <GroupPayments onOpenStudent={(id) => onPick(id)} />
+        )}
       </div>
     );
   }
@@ -706,6 +872,11 @@ function Breakdown({ rows, sick }: { rows: InvoiceRow[]; sick: SickDate[] }) {
                 </tr>
               </tfoot>
             </table>
+            {(r.discount_kopecks ?? 0) > 0 && (
+              <p className="small">
+                Скидка ученика: −{formatMoney(r.discount_kopecks ?? 0)} с цены каждого занятия (уже учтена в ценах выше).
+              </p>
+            )}
             {r.carry_count > 0 && (
               <p className="small">
                 Перенесётся на следующий месяц: {pluralLessons(r.carry_count)}, {formatMoney(r.carry_kopecks)}.
