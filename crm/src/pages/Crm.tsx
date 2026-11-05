@@ -6,6 +6,7 @@ import { ageYears, digits, formatPhone, pluralYears } from '../lib/format';
 import { useDirectory } from '../lib/store';
 import type { DirEnrollment } from '../lib/store';
 import StudentCard from './StudentCard';
+import AddStudentForm from '../components/AddStudentForm';
 
 type Enrollment = DirEnrollment;
 
@@ -48,6 +49,7 @@ export default function Crm() {
   const [groupId, setGroupId] = useState(initial.groupId);
   const [teacherName, setTeacherName] = useState(initial.teacherName);
   const [status, setStatus] = useState<'all' | Enrollment['status']>(initial.status as 'all' | Enrollment['status']);
+  const [adding, setAdding] = useState(false);
 
   useEffect(() => {
     try {
@@ -104,7 +106,15 @@ export default function Crm() {
   return (
     <div className={`split${selectedId ? ' has-card' : ''}`}>
       <div className="split-list">
-      <h1>CRM</h1>
+      <div className="page-head">
+        <h1>CRM</h1>
+        {isAdmin && !adding && (
+          <button type="button" className="btn btn-primary" onClick={() => setAdding(true)}>
+            + Добавить ученика
+          </button>
+        )}
+      </div>
+      {isAdmin && adding && <AddStudentForm onClose={() => setAdding(false)} />}
 
       <div className="filters">
         <input
