@@ -664,16 +664,22 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
 .btn-accent:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); }
 .discount-panel { border-color: var(--accent); }
 .discount-form { margin-top: 8px; max-width: 460px; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+.discount-badge { display: inline-block; padding: 2px 10px; border-radius: 999px; background: #fdf0d9; color: #7a4a05; font-size: 13px; font-weight: 500; white-space: nowrap; }
+.page-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 28px; }
 .page-head h1 { margin: 0; }
-.add-student { max-width: 520px; }
+.add-student { max-width: 560px; }
 .add-student .add-sub { margin: 12px 0 8px; font-size: 15px; font-weight: 500; }
+.add-group-row { display: grid; grid-template-columns: 1fr; gap: 8px; margin-bottom: 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
 .pay-mode { margin-bottom: 16px; }
 .pay-group-top { display: grid; grid-template-columns: 1fr; gap: 0 12px; }
-.pay-group-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 4px; border-bottom: 1px solid var(--line); }
-.pay-group-name { flex: 1; min-width: 0; }
-.pay-group-amount { width: 140px; flex: none; text-align: right; }
-.link-btn { background: none; border: none; padding: 0 0 0 10px; font: inherit; font-size: 13px; color: #2b6cb0; cursor: pointer; text-decoration: underline; }
+/* Строка ученика: имя слева, справа долг, скидка, «История оплат» и поле суммы в одну линию */
+.pay-group-row { display: grid; grid-template-columns: 1fr; gap: 8px; padding: 12px 4px; border-bottom: 1px solid var(--line); align-items: center; }
+.pay-group-name { min-width: 0; }
+.pay-group-info { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.pay-group-amount { width: 100%; text-align: right; }
 @media (min-width: 800px) {
   .pay-group-top { grid-template-columns: 2fr 1fr; }
+  .pay-group-row { grid-template-columns: minmax(0, 1.5fr) minmax(0, 2fr) 150px; gap: 16px; }
+  .pay-group-info { justify-content: flex-end; }
+  .add-group-row { grid-template-columns: 2fr 1.4fr auto; align-items: center; }
 }
