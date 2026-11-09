@@ -10,7 +10,7 @@ import Attendance from './pages/Attendance';
 import AttendanceGroup from './pages/AttendanceGroup';
 import Billing from './pages/Billing';
 import Pricing from './pages/Pricing';
-import Soon from './pages/Soon';
+import Teachers from './pages/Teachers';
 
 export default function App() {
   const { loading, session, profile, profileError, signOut } = useAuth();
@@ -47,7 +47,8 @@ export default function App() {
         <Route path="/attendance/:groupId" element={<AttendanceGroup />} />
         {isAdmin && <Route path="/pricing" element={<Pricing />} />}
         {isAdmin && <Route path="/billing" element={<Billing />} />}
-        {isAdmin && <Route path="/teachers" element={<Soon title="Преподаватели" />} />}
+        {isAdmin && <Route path="/teachers" element={<Teachers />} />}
+        {isAdmin && <Route path="/teachers/:id" element={<Teachers />} />}
         <Route path="*" element={<Navigate to="/crm" replace />} />
       </Route>
     </Routes>
