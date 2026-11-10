@@ -9,7 +9,7 @@ interface DiscountRow {
   amount_kopecks: number;
 }
 
-// Скидка ученика в рублях (как цена): вычитается из цены каждого занятия во всех его группах.
+// Скидка ученика в рублях В МЕСЯЦ: один раз вычитается из счёта (акта) ученика за месяц, во всех группах сразу.
 // История по месяцам: «с месяца такого-то скидка X». Сумма 0 отменяет скидку с этого месяца.
 // Видна и доступна только админу.
 export default function Discounts({ studentId }: { studentId: string }) {
@@ -68,7 +68,7 @@ export default function Discounts({ studentId }: { studentId: string }) {
   };
 
   const remove = async (r: DiscountRow) => {
-    if (!window.confirm(`Удалить запись «с ${formatMonth(monthOf(r.valid_from)).toLowerCase()}: ${formatMoney(r.amount_kopecks)}»?`)) return;
+    if (!window.confirm(`Удалить запись «с ${formatMonth(monthOf(r.valid_from)).toLowerCase()}: ${formatMoney(r.amount_kopecks)} в месяц»?`)) return;
     const { data, error } = await supabase.from('student_discounts').delete().eq('id', r.id).select('id');
     if (error) return setErr(error.message);
     if (!data || data.length === 0) return setErr('Не удалось удалить: нет прав или запись не найдена');
@@ -93,7 +93,7 @@ export default function Discounts({ studentId }: { studentId: string }) {
         <p>
           {current && current.amount_kopecks > 0 ? (
             <>
-              Сейчас: <strong>−{formatMoney(current.amount_kopecks)}</strong> с цены каждого занятия, во всех группах.
+              Сейчас: <strong>−{formatMoney(current.amount_kopecks)} в месяц</strong>: вычитается один раз из каждого счёта (акта), даже если ученик занимается в нескольких группах.
             </>
           ) : (
             <span className="muted">Скидки нет.</span>
@@ -104,7 +104,7 @@ export default function Discounts({ studentId }: { studentId: string }) {
       {open && (
         <div className="discount-form">
           <label className="field">
-            <span>Скидка с цены одного занятия, BYN</span>
+            <span>Скидка в месяц, BYN</span>
             <input inputMode="decimal" value={amount} onChange={(e) => setAmount(e.target.value)} placeholder="2,00" autoFocus />
           </label>
           <label className="field">
@@ -118,8 +118,8 @@ export default function Discounts({ studentId }: { studentId: string }) {
             </select>
           </label>
           <p className="muted small">
-            Скидка уменьшает цену каждого занятия (и регулярную, и разовую) в этом и следующих месяцах, пока не будет изменена.
-            Чтобы отменить скидку, введите 0 и месяц, с которого она больше не действует.
+            Эта сумма один раз вычитается из счёта ученика за каждый месяц (из каждого акта), начиная с выбранного месяца, пока скидка не изменена.
+            Скидка не больше счёта за месяц. Чтобы отменить, введите 0 и месяц, с которого она больше не действует.
           </p>
           {err && <p className="error">{err}</p>}
           <div className="field-actions">
@@ -140,7 +140,7 @@ export default function Discounts({ studentId }: { studentId: string }) {
           {upcoming
             .slice()
             .reverse()
-            .map((r) => `с ${formatMonth(monthOf(r.valid_from)).toLowerCase()}: ${r.amount_kopecks > 0 ? '−' : ''}${formatMoney(r.amount_kopecks)}`)
+            .map((r) => `с ${formatMonth(monthOf(r.valid_from)).toLowerCase()}: ${r.amount_kopecks > 0 ? `−${formatMoney(r.amount_kopecks)} в месяц` : 'без скидки'}`)
             .join('; ')}
         </p>
       )}
@@ -154,7 +154,7 @@ export default function Discounts({ studentId }: { studentId: string }) {
             {rows.map((r) => (
               <div key={r.id} className="pay-row">
                 <span>с {formatMonth(monthOf(r.valid_from)).toLowerCase()}</span>
-                <strong>{r.amount_kopecks > 0 ? `−${formatMoney(r.amount_kopecks)}` : 'без скидки'}</strong>
+                <strong>{r.amount_kopecks > 0 ? `−${formatMoney(r.amount_kopecks)} в месяц` : 'без скидки'}</strong>
                 <button type="button" className="btn btn-sm btn-danger" onClick={() => remove(r)}>
                   Удалить
                 </button>
