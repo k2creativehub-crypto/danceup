@@ -41,7 +41,7 @@ interface InvoiceRow {
   lessons_without_price: number;
   charge_kopecks: number;
   single_price_kopecks: number | null;
-  discount_kopecks?: number | null;
+  discount_kopecks?: number | null; // скидка на месяц, вычтенная в этой строке
 }
 interface SickDate {
   group_id: string;
@@ -72,6 +72,7 @@ interface ActData {
   creditInCount: number; // зачтено с прошлого периода
   creditInKopecks: number;
   sickAdjustKopecks: number; // доплата за «б» по разовой цене
+  discountKopecks?: number; // скидка ученика на месяц (в старых актах из архива поля нет)
   dueKopecks: number; // сумма к оплате за месяц
   debtKopecks: number; // задолженность на конец месяца
   actDate: string;
@@ -109,6 +110,7 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
   const adjust = sum((r) => r.sick_adjust_kopecks);
   const creditIn = sum((r) => r.credit_in_kopecks);
   const contractRow = rows.find((r) => r.contract_number);
+  const discount = sum((r) => r.discount_kopecks ?? 0);
   return {
     ym,
     studentName: first.student_name,
@@ -119,12 +121,13 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
     lessons,
     subscriptionKopecks: gross,
     used: lessons - carryCount,
-    servicesKopecks: gross - carryKopecks + adjust,
+    servicesKopecks: gross - carryKopecks + adjust - discount,
     carryCount,
     carryKopecks,
     creditInCount: sum((r) => r.credit_in_count),
     creditInKopecks: creditIn,
     sickAdjustKopecks: adjust,
+    discountKopecks: discount,
     dueKopecks: sum((r) => r.charge_kopecks),
     debtKopecks: Math.max(debtKopecks, 0),
     actDate: lastDayOfMonth(ym),
@@ -193,6 +196,7 @@ function ActSheet({ a }: { a: ActData }) {
           {pluralLessons(a.lessons)}.
           {a.creditInCount > 0 &&
             ` В счёт абонемента зачтено занятий, перенесённых с предыдущего периода: ${a.creditInCount}, стоимостью ${rub(a.creditInKopecks)} без НДС.`}
+          {(a.discountKopecks ?? 0) > 0 && ` Заказчику предоставлена скидка ${rub(a.discountKopecks ?? 0)} без НДС.`}
         </li>
         <li>
           Заказчик посетил {pluralLessons(a.used)}. Абонемент использован {a.carryCount === 0 ? '' : 'не '}полностью.
@@ -463,6 +467,7 @@ function GroupPayments({ onOpenStudent }: { onOpenStudent: (id: string) => void 
   const [date, setDate] = useState(todayMinsk());
   const [amounts, setAmounts] = useState<Record<string, string>>({});
   const [balances, setBalances] = useState<Balance[] | null>(null);
+  const [discounts, setDiscounts] = useState<Map<string, number>>(new Map());
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [done, setDone] = useState<string | null>(null);
@@ -471,10 +476,24 @@ function GroupPayments({ onOpenStudent }: { onOpenStudent: (id: string) => void 
   useEffect(() => {
     let alive = true;
     (async () => {
-      const { data, error } = await supabase.rpc('student_balances', { p_to: todayMinsk() });
+      const [ba, di] = await Promise.all([
+        supabase.rpc('student_balances', { p_to: todayMinsk() }),
+        supabase.from('student_discounts').select('student_id, valid_from, amount_kopecks').limit(10000),
+      ]);
       if (!alive) return;
-      if (error) return setErr(error.message);
-      setBalances((data ?? []) as Balance[]);
+      if (ba.error) return setErr(ba.error.message);
+      setBalances((ba.data ?? []) as Balance[]);
+      // Действующая сейчас скидка: последняя запись с началом не позже текущего месяца
+      if (!di.error) {
+        const thisMonth = monthOf(todayMinsk());
+        const latest = new Map<string, { from: string; amount: number }>();
+        for (const r of (di.data ?? []) as { student_id: string; valid_from: string; amount_kopecks: number }[]) {
+          if (monthOf(r.valid_from) > thisMonth) continue;
+          const cur = latest.get(r.student_id);
+          if (!cur || r.valid_from > cur.from) latest.set(r.student_id, { from: r.valid_from, amount: r.amount_kopecks });
+        }
+        setDiscounts(new Map([...latest].map(([id, v]) => [id, v.amount])));
+      }
     })();
     return () => {
       alive = false;
@@ -560,17 +579,19 @@ function GroupPayments({ onOpenStudent }: { onOpenStudent: (id: string) => void 
           <div className="bal-list">
             {members.map((m) => {
               const b = balances?.find((x) => x.student_id === m.id);
+              const disc = discounts.get(m.id) ?? 0;
               return (
                 <div key={m.id} className="pay-group-row">
                   <div className="pay-group-name">
                     <strong>{m.name}</strong>
                     {m.status === 'left' && <span className="muted small"> · выбыл(а)</span>}
-                    <div className="small">
-                      {b ? <Debt kopecks={b.debt_kopecks} /> : <span className="muted">…</span>}
-                      <button type="button" className="link-btn" onClick={() => onOpenStudent(m.id)}>
-                        история оплат
-                      </button>
-                    </div>
+                  </div>
+                  <div className="pay-group-info">
+                    {b ? <Debt kopecks={b.debt_kopecks} /> : <span className="muted">…</span>}
+                    {disc > 0 && <span className="discount-badge">скидка −{formatMoney(disc)} / мес</span>}
+                    <button type="button" className="btn btn-sm" onClick={() => onOpenStudent(m.id)}>
+                      История оплат
+                    </button>
                   </div>
                   <input
                     className="pay-group-amount"
@@ -874,7 +895,7 @@ function Breakdown({ rows, sick }: { rows: InvoiceRow[]; sick: SickDate[] }) {
             </table>
             {(r.discount_kopecks ?? 0) > 0 && (
               <p className="small">
-                Скидка ученика: −{formatMoney(r.discount_kopecks ?? 0)} с цены каждого занятия (уже учтена в ценах выше).
+                Скидка ученика на месяц: −{formatMoney(r.discount_kopecks ?? 0)} (вычтена один раз из суммы к оплате; при нескольких группах показана в первой по алфавиту).
               </p>
             )}
             {r.carry_count > 0 && (
@@ -886,6 +907,7 @@ function Breakdown({ rows, sick }: { rows: InvoiceRow[]; sick: SickDate[] }) {
               Выставлено к оплате: абонемент {r.lessons_count} × {p === null ? '—' : formatMoney(p)} = {formatMoney(r.gross_kopecks)}
               {r.sick_adjust_kopecks !== 0 && <>; доплата за «б» по разовому тарифу {formatMoney(r.sick_adjust_kopecks)}</>}
               {r.credit_in_kopecks > 0 && <>; зачтено с прошлого месяца −{formatMoney(r.credit_in_kopecks)}</>}
+              {(r.discount_kopecks ?? 0) > 0 && <>; скидка −{formatMoney(r.discount_kopecks ?? 0)}</>}
               {' '}
               → <strong>{formatMoney(r.charge_kopecks)}</strong>
             </p>
