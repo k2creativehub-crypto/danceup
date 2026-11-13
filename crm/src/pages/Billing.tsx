@@ -42,6 +42,7 @@ interface InvoiceRow {
   charge_kopecks: number;
   single_price_kopecks: number | null;
   discount_kopecks?: number | null; // скидка на месяц, вычтенная в этой строке
+  free_count?: number | null; // дополнительные (бесплатные) занятия: входят в число занятий, но не оплачиваются
 }
 interface SickDate {
   group_id: string;
@@ -73,6 +74,7 @@ interface ActData {
   creditInKopecks: number;
   sickAdjustKopecks: number; // доплата за «б» по разовой цене
   discountKopecks?: number; // скидка ученика на месяц (в старых актах из архива поля нет)
+  freeCount?: number; // дополнительных (бесплатных) занятий (в старых актах из архива поля нет)
   dueKopecks: number; // сумма к оплате за месяц
   debtKopecks: number; // задолженность на конец месяца
   actDate: string;
@@ -111,6 +113,7 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
   const creditIn = sum((r) => r.credit_in_kopecks);
   const contractRow = rows.find((r) => r.contract_number);
   const discount = sum((r) => r.discount_kopecks ?? 0);
+  const freeCount = sum((r) => r.free_count ?? 0);
   return {
     ym,
     studentName: first.student_name,
@@ -128,6 +131,7 @@ function buildAct(rows: InvoiceRow[], ym: string, debtKopecks: number): ActData 
     creditInKopecks: creditIn,
     sickAdjustKopecks: adjust,
     discountKopecks: discount,
+    freeCount,
     dueKopecks: sum((r) => r.charge_kopecks),
     debtKopecks: Math.max(debtKopecks, 0),
     actDate: lastDayOfMonth(ym),
@@ -194,6 +198,7 @@ function ActSheet({ a }: { a: ActData }) {
         <li>
           Заказчиком приобретен абонемент стоимостью {rub(a.subscriptionKopecks)} без НДС, включающий{' '}
           {pluralLessons(a.lessons)}.
+          {(a.freeCount ?? 0) > 0 && ` Из них дополнительных занятий, предоставленных бесплатно: ${a.freeCount}.`}
           {a.creditInCount > 0 &&
             ` В счёт абонемента зачтено занятий, перенесённых с предыдущего периода: ${a.creditInCount}, стоимостью ${rub(a.creditInKopecks)} без НДС.`}
           {(a.discountKopecks ?? 0) > 0 && ` Заказчику предоставлена скидка ${rub(a.discountKopecks ?? 0)} без НДС.`}
@@ -898,13 +903,18 @@ function Breakdown({ rows, sick }: { rows: InvoiceRow[]; sick: SickDate[] }) {
                 Скидка ученика на месяц: −{formatMoney(r.discount_kopecks ?? 0)} (вычтена один раз из суммы к оплате; при нескольких группах показана в первой по алфавиту).
               </p>
             )}
+            {(r.free_count ?? 0) > 0 && (
+              <p className="small">
+                В месяце занятий: {r.lessons_count}, из них дополнительных (бесплатных): {r.free_count}. Оплачивается {r.lessons_count - (r.free_count ?? 0)}.
+              </p>
+            )}
             {r.carry_count > 0 && (
               <p className="small">
                 Перенесётся на следующий месяц: {pluralLessons(r.carry_count)}, {formatMoney(r.carry_kopecks)}.
               </p>
             )}
             <p className="small detail-total">
-              Выставлено к оплате: абонемент {r.lessons_count} × {p === null ? '—' : formatMoney(p)} = {formatMoney(r.gross_kopecks)}
+              Выставлено к оплате: абонемент {r.lessons_count - (r.free_count ?? 0)} × {p === null ? '—' : formatMoney(p)} = {formatMoney(r.gross_kopecks)}
               {r.sick_adjust_kopecks !== 0 && <>; доплата за «б» по разовому тарифу {formatMoney(r.sick_adjust_kopecks)}</>}
               {r.credit_in_kopecks > 0 && <>; зачтено с прошлого месяца −{formatMoney(r.credit_in_kopecks)}</>}
               {(r.discount_kopecks ?? 0) > 0 && <>; скидка −{formatMoney(r.discount_kopecks ?? 0)}</>}
