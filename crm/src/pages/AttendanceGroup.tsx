@@ -23,6 +23,7 @@ import { useDirectory } from '../lib/store';
 interface LessonData {
   id: string;
   cancelled: boolean;
+  extra: boolean; // дополнительное (бесплатное) занятие
   marks: Map<string, Mark>;
 }
 type SickKind = 'regular' | 'single';
@@ -40,6 +41,7 @@ interface LessonRow {
   id: string;
   lesson_date: string;
   is_cancelled: boolean;
+  is_extra: boolean;
   attendance: { student_id: string; mark: Mark }[];
 }
 
@@ -97,7 +99,7 @@ export default function AttendanceGroup() {
     const { from, to } = monthBounds(ym);
     const { data, error: e } = await supabase
       .from('lessons')
-      .select('id, lesson_date, is_cancelled, attendance(student_id, mark)')
+      .select('id, lesson_date, is_cancelled, is_extra, attendance(student_id, mark)')
       .eq('group_id', groupId)
       .gte('lesson_date', from)
       .lte('lesson_date', to);
@@ -121,6 +123,7 @@ export default function AttendanceGroup() {
       lessons.set(l.lesson_date, {
         id: l.id,
         cancelled: l.is_cancelled,
+        extra: l.is_extra,
         marks: new Map<string, Mark>(l.attendance.filter((a) => a.mark !== 'present').map((a) => [a.student_id, a.mark])),
       });
     }
@@ -222,7 +225,7 @@ export default function AttendanceGroup() {
   const sickCountOf = (sid: string): number => {
     let n = 0;
     for (const [d, l] of lessonsMap) {
-      if (!l.cancelled && !isExtra(d) && l.marks.get(sid) === 'sick') n += 1;
+      if (!l.cancelled && !l.extra && !isExtra(d) && l.marks.get(sid) === 'sick') n += 1;
     }
     return n;
   };
@@ -262,7 +265,7 @@ export default function AttendanceGroup() {
       const marks = new Map<string, Mark>(cur?.marks ?? []);
       if (mark === 'present') marks.delete(studentId);
       else marks.set(studentId, mark);
-      lessons.set(d, { id: cur?.id ?? '', cancelled: cur?.cancelled ?? false, marks });
+      lessons.set(d, { id: cur?.id ?? '', cancelled: cur?.cancelled ?? false, extra: cur?.extra ?? false, marks });
       return { ...m, lessons };
     });
     const { error: e } = await supabase.rpc('save_attendance', {
@@ -282,6 +285,25 @@ export default function AttendanceGroup() {
     const { error: e } = await supabase.rpc('cancel_lesson', { p_group_id: groupId, p_date: d });
     if (e) setError(friendlyError(e));
     else setFlash('Занятие отмечено как не состоявшееся');
+    await load();
+    setBusy(false);
+  };
+
+  // Дополнительное занятие: входит в число занятий месяца, но не оплачивается
+  const toggleFree = async (d: string, value: boolean) => {
+    if (
+      value &&
+      !window.confirm(
+        `Сделать занятие ${formatLong(d)} дополнительным? Оно станет бесплатным для всех учеников группы: войдёт в число занятий месяца, но не в оплату.`,
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const { error: e } = await supabase.rpc('set_lesson_extra', { p_group_id: groupId, p_date: d, p_extra: value });
+    if (e) setError(friendlyError(e));
+    else setFlash(value ? 'Занятие отмечено как дополнительное' : 'Отметка «дополнительное» снята');
     await load();
     setBusy(false);
   };
@@ -425,9 +447,9 @@ export default function AttendanceGroup() {
                   <button
                     type="button"
                     key={d}
-                    className={`date-chip${d === selected ? ' is-selected' : ''}${d === today ? ' is-today' : ''}${changed ? ' is-changed' : ''}${l?.cancelled ? ' is-cancelled' : ''}`}
+                    className={`date-chip${d === selected ? ' is-selected' : ''}${d === today ? ' is-today' : ''}${changed ? ' is-changed' : ''}${l?.cancelled ? ' is-cancelled' : ''}${l?.extra && !l.cancelled ? ' is-free' : ''}`}
                     onClick={() => setSelected(d)}
-                    title={`${formatLong(d)}${isExtra(d) ? ' (вне расписания)' : ''}${l?.cancelled ? ': не состоялось' : ''}`}
+                    title={`${formatLong(d)}${isExtra(d) ? ' (вне расписания)' : ''}${l?.extra && !l.cancelled ? ' (дополнительное, бесплатное)' : ''}${l?.cancelled ? ': не состоялось' : ''}`}
                   >
                     <span className="date-chip-wd">{weekdayShort(d)}</span>
                     <span className="date-chip-day">{dayNum(d)}</span>
@@ -474,6 +496,15 @@ export default function AttendanceGroup() {
                   {cancelled ? 'Не состоялось' : (selLesson?.marks.size ?? 0) > 0 ? `Исключений: ${selLesson?.marks.size}` : 'Все «+»'}
                 </span>
               </div>
+
+              {selLesson?.extra && !cancelled && (
+                <>
+                  <div className="extra-banner">ДОПОЛНИТЕЛЬНОЕ ЗАНЯТИЕ</div>
+                  <p className="muted small">
+                    Бесплатное для всех учеников группы: входит в число занятий месяца, но не оплачивается. Отметки на нём на счёт не влияют.
+                  </p>
+                </>
+              )}
 
               {!editable && (
                 <p className="att-notice">
@@ -581,6 +612,16 @@ export default function AttendanceGroup() {
 
                   {editable && (
                     <div className="field-actions att-actions">
+                      {!isExtra(selected) && (
+                        <button
+                          type="button"
+                          className="btn btn-red btn-sm"
+                          onClick={() => toggleFree(selected, !selLesson?.extra)}
+                          disabled={busy}
+                        >
+                          {selLesson?.extra ? 'Снять отметку «дополнительное»' : 'Сделать дополнительным'}
+                        </button>
+                      )}
                       <button type="button" className="btn btn-danger btn-sm" onClick={() => cancelLesson(selected)} disabled={busy}>
                         Занятие не состоялось
                       </button>
@@ -619,6 +660,7 @@ export default function AttendanceGroup() {
                         <strong>{dayNum(d)}</strong>
                       </button>
                       {lessonsMap.get(d)?.cancelled && <span className="att-cancel-tag">отмена</span>}
+                      {lessonsMap.get(d)?.extra && !lessonsMap.get(d)?.cancelled && <span className="att-cancel-tag att-free-tag">доп.</span>}
                     </th>
                   ))}
                   <th className="att-total">«+»</th>
