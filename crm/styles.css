@@ -683,3 +683,10 @@ textarea:focus { outline: 2px solid var(--primary); outline-offset: 1px; }
   .pay-group-info { justify-content: flex-end; }
   .add-group-row { grid-template-columns: 2fr 1.4fr auto; align-items: center; }
 }
+
+/* Дополнительное (бесплатное) занятие */
+.btn-red { background: #d93025; border-color: #d93025; color: #fff; }
+.btn-red:hover:not(:disabled) { background: #b8261c; border-color: #b8261c; }
+.extra-banner { color: #d93025; font-weight: 700; letter-spacing: 0.06em; margin: -2px 0 8px; }
+.date-chip.is-free .date-chip-dot { background: #d93025; }
+.att-free-tag { color: #d93025; }
